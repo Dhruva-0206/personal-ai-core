@@ -19,6 +19,9 @@ retrieval-augmented reasoning about the user's evolving context.
   graph engine with 3-layer entity resolution and write-time state
   supersession, manual CLI test harness. Offline tests passing (7/7). Not
   yet validated against live Nebius/Neo4j credentials.
+- Phase 1 validated against live Nebius Token Factory (model:
+  nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B) + Neo4j Aura — supersession
+  round-trip confirmed working.
 
 ## Next up
 

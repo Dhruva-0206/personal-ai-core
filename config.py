@@ -23,10 +23,10 @@ NEBIUS_BASE_URL = _get("NEBIUS_BASE_URL", "https://api.tokenfactory.nebius.com/v
 # reasoning mode by default and return their answer in `reasoning_content`
 # instead of `content` — llm_client.py handles both, but if a non-reasoning
 # variant becomes available/preferred, swap the model id here.
-EXTRACTION_MODEL = _get("EXTRACTION_MODEL", "nvidia/Llama-3_1-Nemotron-Ultra-253B-v1")
+EXTRACTION_MODEL = _get("EXTRACTION_MODEL", "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B")
 
 # Embedding model for entity-resolution similarity and (later) retrieval.
-EMBEDDING_MODEL = _get("EMBEDDING_MODEL", "BAAI/bge-multilingual-gemma2")
+EMBEDDING_MODEL = _get("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-8B")
 
 # --- Neo4j (graph memory) ---
 NEO4J_URI = _get("NEO4J_URI")
