@@ -35,6 +35,29 @@ retrieval-augmented reasoning about the user's evolving context.
   against live Nebius + Neo4j with a single canonical "User" entity and
   correct city attribute supersession.
 
+- Phase 2 (partial): added retrieval.py — vector similarity search over
+  Episode nodes (full per-speaker scan, no Neo4j vector index yet) combined
+  with a 3D scoring formula (similarity/importance/recency) and a landmark
+  bypass (importance >= IMPORTANCE_LANDMARK_FLOOR forces recency to 1.0).
+  Added supersession-aware ranking: OUTDATED_STATE_PENALTY=0.5 (guessed,
+  not calibrated) is applied to combined_score when every State an episode
+  wrote is now superseded, so an outdated fact can't outrank the current
+  one purely on text similarity — episodes with zero states or at least
+  one active state are never penalized. Added cli.py search command,
+  showing state_status (current/superseded/no_state) per result. Validated
+  against live Nebius + Neo4j: New York now correctly outranks San
+  Francisco for "where do I currently live" (0.684 vs 0.318) after
+  previously losing on a 0.004 margin.
+  Known unresolved calibration questions, deferred pending real usage
+  data: (1) WEIGHT_SIMILARITY/IMPORTANCE/RECENCY (0.55/0.35/0.10) allow
+  high-importance-but-irrelevant episodes to outrank strong keyword
+  matches — observed with a "coffee" query losing to unrelated high-
+  importance episodes; (2) OUTDATED_STATE_PENALTY=0.5 is an unvalidated
+  guess; (3) recency provides no differentiation when episodes are close
+  in time (expected behavior of the half-life formula, not a bug, but
+  worth remembering when testing with freshly-logged data).
+
 ## Next up
 
-Phase 2: retrieval layer (multi-lane retrieval + scoring).
+Phase 2 (remaining): full-text search lane, recency safety net lane,
+merge multiple lanes into one ranked result.

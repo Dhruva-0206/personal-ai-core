@@ -56,6 +56,15 @@ WEIGHT_RECENCY = float(_get("WEIGHT_RECENCY", "0.10"))
 IMPORTANCE_LANDMARK_FLOOR = float(_get("IMPORTANCE_LANDMARK_FLOOR", "0.75"))
 RECENCY_HALF_LIFE_DAYS = float(_get("RECENCY_HALF_LIFE_DAYS", "365"))
 
+# Multiplier applied to an episode's combined_score if every State it wrote
+# has since been superseded — a guessed starting value (0.5 = half credit),
+# not calibrated. The point isn't to hide superseded episodes (they should
+# still surface for historical questions via other lanes later) but to
+# stop a fully-outdated fact from outranking the current one purely on
+# text similarity. Revisit once real usage shows whether 0.5 is too harsh
+# or too weak.
+OUTDATED_STATE_PENALTY = float(_get("OUTDATED_STATE_PENALTY", "0.5"))
+
 # Namespace: every graph write/read is scoped to a speaker id so multiple
 # people (or test runs) never bleed into each other's memory.
 DEFAULT_SPEAKER = _get("DEFAULT_SPEAKER", "default")

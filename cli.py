@@ -8,12 +8,14 @@ Usage:
     python cli.py chat                       # interactive loop, one line at a time
     python cli.py history "Alex"             # show everything currently/previously true about an entity
     python cli.py reset <speaker> --confirm  # delete all graph data for one speaker
+    python cli.py search "where do I live"   # rank episodes by relevance (no LLM answer yet)
 """
 import sys
 import logging
 
 import graph_engine
 import pipeline
+import retrieval
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -60,6 +62,21 @@ def cmd_reset(speaker: str, args: list[str]):
           f"{result['relationships_deleted']} relationships deleted.")
 
 
+def cmd_search(question: str):
+    results = retrieval.retrieve(question)
+    if not results:
+        print(f"No results for '{question}'.")
+        return
+    print(f"\nSearch results for '{question}':")
+    for rank, r in enumerate(results, start=1):
+        print(f"  #{rank}  combined_score={round(r['combined_score'], 3)}  "
+              f"similarity={round(r['similarity'], 3)}  "
+              f"importance={r['importance']}  "
+              f"recency={round(r['recency'], 3)}  "
+              f"state_status={r['state_status']}  "
+              f"summary: {r['summary']}")
+
+
 def cmd_history(entity_name: str):
     driver = graph_engine.get_driver()
     with driver.session() as session:
@@ -89,6 +106,8 @@ if __name__ == "__main__":
         cmd_history(" ".join(sys.argv[2:]))
     elif command == "reset" and len(sys.argv) > 2:
         cmd_reset(sys.argv[2], sys.argv[3:])
+    elif command == "search" and len(sys.argv) > 2:
+        cmd_search(" ".join(sys.argv[2:]))
     else:
         print(__doc__)
         sys.exit(1)
