@@ -1,0 +1,75 @@
+"""
+Manual test CLI for Phase 1. This is the only ingestion "adapter" that
+exists yet — you type a sentence, it goes through the full pipeline.
+
+Usage:
+    python cli.py setup                     # create Neo4j constraints/indexes, run once
+    python cli.py log "I moved to Austin"    # ingest one line
+    python cli.py chat                       # interactive loop, one line at a time
+    python cli.py history "Alex"             # show everything currently/previously true about an entity
+"""
+import sys
+import logging
+
+import graph_engine
+import pipeline
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+
+def cmd_setup():
+    graph_engine.ensure_schema()
+    print("Schema ready (constraints + indexes created if missing).")
+
+
+def cmd_log(text: str):
+    result = pipeline.ingest_episode(text)
+    print(f"\nStored episode {result['episode_id']}")
+    print(f"  summary:    {result['summary']}")
+    print(f"  importance: {result['importance']}")
+    print(f"  entities:   {result['entities']}")
+    print(f"  states/actions/relations written: "
+          f"{result['states_written']}/{result['actions_written']}/{result['relations_written']}")
+
+
+def cmd_chat():
+    print("Type a line and press enter to store it. Ctrl+C to quit.\n")
+    try:
+        while True:
+            text = input("> ").strip()
+            if text:
+                cmd_log(text)
+    except KeyboardInterrupt:
+        print("\nbye")
+
+
+def cmd_history(entity_name: str):
+    driver = graph_engine.get_driver()
+    with driver.session() as session:
+        rows = graph_engine.entity_history(session, "default", entity_name)
+    if not rows:
+        print(f"No history found for '{entity_name}'.")
+        return
+    print(f"\nHistory for '{entity_name}':")
+    for row in rows:
+        status = "ACTIVE" if row["active"] else f"superseded at {row['superseded_at']}"
+        print(f"  {row['attribute']} = {row['value']}   [{status}]   (created {row['created_at']})")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print(__doc__)
+        sys.exit(1)
+
+    command = sys.argv[1]
+    if command == "setup":
+        cmd_setup()
+    elif command == "log" and len(sys.argv) > 2:
+        cmd_log(" ".join(sys.argv[2:]))
+    elif command == "chat":
+        cmd_chat()
+    elif command == "history" and len(sys.argv) > 2:
+        cmd_history(" ".join(sys.argv[2:]))
+    else:
+        print(__doc__)
+        sys.exit(1)
