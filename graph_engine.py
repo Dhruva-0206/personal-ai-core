@@ -17,6 +17,7 @@ of a speaker's entities, which is fine for a hackathon-scale graph. Once a
 speaker's entity count grows large, swap this for Neo4j's native vector
 index instead of changing the calling code's shape.
 """
+import logging
 import math
 import uuid
 from datetime import datetime, timezone
@@ -24,6 +25,8 @@ from datetime import datetime, timezone
 from neo4j import GraphDatabase
 
 import config
+
+logger = logging.getLogger(__name__)
 
 _driver = None
 
@@ -124,6 +127,63 @@ def resolve_entity(session, speaker: str, name: str, embedding: list[float]) -> 
     return name
 
 
+def resolve_attribute(session, speaker: str, entity_name: str, attribute: str,
+                       embedding: list[float]) -> str:
+    """
+    Three-layer attribute-name resolution, mirroring resolve_entity but
+    scoped to one entity's own state history rather than global: exact
+    match (case-insensitive), then substring containment, then embedding
+    cosine similarity above config.ATTRIBUTE_SIMILARITY_THRESHOLD, over the
+    distinct attribute names ever used on States attached to this entity.
+    Returns the attribute unchanged if nothing matches — it's new.
+    """
+    attribute_lower = attribute.strip().lower()
+
+    # Layer 1: exact match, case-insensitive
+    result = session.run(
+        "MATCH (e:Entity {speaker: $speaker, name: $entity_name})-[:OF_ENTITY]-(s:State) "
+        "WHERE toLower(s.attribute) = $attribute_lower "
+        "RETURN s.attribute AS attribute LIMIT 1",
+        speaker=speaker, entity_name=entity_name, attribute_lower=attribute_lower,
+    ).single()
+    if result:
+        return result["attribute"]
+
+    # Layer 2: substring containment (longest existing attribute wins)
+    if len(attribute_lower) >= config.ATTRIBUTE_SUBSTRING_MIN_LEN:
+        result = session.run(
+            "MATCH (e:Entity {speaker: $speaker, name: $entity_name})-[:OF_ENTITY]-(s:State) "
+            "WHERE toLower(s.attribute) CONTAINS $attribute_lower OR $attribute_lower CONTAINS toLower(s.attribute) "
+            "RETURN s.attribute AS attribute ORDER BY size(s.attribute) DESC LIMIT 1",
+            speaker=speaker, entity_name=entity_name, attribute_lower=attribute_lower,
+        ).single()
+        if result:
+            return result["attribute"]
+
+    # Layer 3: embedding cosine similarity above threshold
+    rows = session.run(
+        "MATCH (e:Entity {speaker: $speaker, name: $entity_name})-[:OF_ENTITY]-(s:State) "
+        "WHERE s.attribute_embedding IS NOT NULL "
+        "RETURN DISTINCT s.attribute AS attribute, s.attribute_embedding AS embedding",
+        speaker=speaker, entity_name=entity_name,
+    )
+    best_attribute, best_score = None, 0.0
+    for row in rows:
+        score = _cosine(embedding, row["embedding"])
+        if 0.64 <= score <= 0.80:
+            logger.info(
+                "Borderline attribute match: '%s' vs '%s' = %s",
+                attribute, row["attribute"], score,
+            )
+        if score > best_score:
+            best_attribute, best_score = row["attribute"], score
+    if best_attribute and best_score >= config.ATTRIBUTE_SIMILARITY_THRESHOLD:
+        return best_attribute
+
+    # No match anywhere: it's a new attribute name for this entity
+    return attribute
+
+
 def create_episode(session, speaker: str, raw_text: str, summary: str,
                     importance: float, embedding: list[float], event_time) -> str:
     episode_id = str(uuid.uuid4())
@@ -146,10 +206,12 @@ def link_episode_entity(session, episode_id: str, entity_name: str, speaker: str
 
 
 def create_state(session, speaker: str, entity_name: str, attribute: str,
-                  value: str, episode_id: str):
+                  value: str, episode_id: str, attribute_embedding: list[float]):
     """
     Write a new State for (entity, attribute), superseding whichever State(s)
-    were previously active for that pair. Nothing is deleted.
+    were previously active for that pair. Nothing is deleted. `attribute`
+    is expected to already be canonicalized (see graph_engine.resolve_attribute)
+    so this matching stays a plain equality check on entity+attribute.
     """
     # Deactivate currently-active states for this (entity, attribute)
     session.run(
@@ -162,7 +224,7 @@ def create_state(session, speaker: str, entity_name: str, attribute: str,
     session.run(
         "MATCH (e:Entity {speaker: $speaker, name: $name}), (ep:Episode {id: $episode_id}) "
         "CREATE (s:State {id: $state_id, attribute: $attribute, value: $value, "
-        "active: true, created_at: datetime()}) "
+        "attribute_embedding: $attribute_embedding, active: true, created_at: datetime()}) "
         "CREATE (s)-[:OF_ENTITY]->(e) "
         "CREATE (ep)-[:HAS_STATE]->(s) "
         "WITH s, e "
@@ -172,6 +234,7 @@ def create_state(session, speaker: str, entity_name: str, attribute: str,
         "  MERGE (s)-[:SUPERSEDES]->(old))",
         speaker=speaker, name=entity_name, episode_id=episode_id,
         state_id=state_id, attribute=attribute, value=value,
+        attribute_embedding=attribute_embedding,
     )
 
 
@@ -202,6 +265,30 @@ def create_relation(session, speaker: str, episode_id: str, subject_name: str,
         episode_id=episode_id, speaker=speaker, subject_name=subject_name,
         rel_type=rel_type, object_name=object_name, relation_id=relation_id,
     )
+
+
+def reset_speaker(session, speaker: str) -> dict:
+    """
+    Deletes every node scoped to `speaker`. Entity and Episode carry the
+    speaker property directly; State/Action/Relation don't, so they're
+    reached by walking out from the Entity/Episode nodes that own them
+    (OF_ENTITY/HAS_STATE, BY_ENTITY/HAS_ACTION, FROM_ENTITY/TO_ENTITY/
+    HAS_RELATION) before deleting everything together.
+    """
+    result = session.run(
+        "MATCH (n {speaker: $speaker}) WHERE n:Entity OR n:Episode "
+        "OPTIONAL MATCH (n)-[:OF_ENTITY|HAS_STATE|BY_ENTITY|HAS_ACTION|FROM_ENTITY|TO_ENTITY|HAS_RELATION]-(m) "
+        "WHERE m:State OR m:Action OR m:Relation "
+        "WITH collect(DISTINCT n) AS ns, collect(DISTINCT m) AS ms "
+        "UNWIND ns + ms AS x "
+        "DETACH DELETE x",
+        speaker=speaker,
+    )
+    summary = result.consume()
+    return {
+        "nodes_deleted": summary.counters.nodes_deleted,
+        "relationships_deleted": summary.counters.relationships_deleted,
+    }
 
 
 def entity_history(session, speaker: str, entity_name: str) -> list[dict]:

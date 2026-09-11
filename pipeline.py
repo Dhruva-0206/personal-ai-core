@@ -58,8 +58,13 @@ def ingest_episode(raw_text: str, speaker: str = None) -> dict:
 
         for state in parsed["states"]:
             entity_name = canon(state["entity"])
+            attribute_embedding = llm_client.embed(state["attribute"])
+            attribute = graph_engine.resolve_attribute(
+                session, speaker, entity_name, state["attribute"], attribute_embedding
+            )
             graph_engine.create_state(
-                session, speaker, entity_name, state["attribute"], state["value"], episode_id
+                session, speaker, entity_name, attribute, state["value"],
+                episode_id, attribute_embedding
             )
 
         for action in parsed["actions"]:

@@ -22,6 +22,18 @@ retrieval-augmented reasoning about the user's evolving context.
 - Phase 1 validated against live Nebius Token Factory (model:
   nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B) + Neo4j Aura — supersession
   round-trip confirmed working.
+- Phase 1 complete: fixed self-reference entity fragility (extraction.py
+  now deterministically normalizes I/me/my/mine/myself to "User" in code
+  rather than relying on LLM prompt compliance) and added attribute-name
+  resolution (graph_engine.resolve_attribute(), mirroring entity
+  resolution but scoped per-entity, with ATTRIBUTE_SIMILARITY_THRESHOLD=0.72
+  chosen from two live data points: city/location should-merge scored
+  0.8034, city/job should-NOT-merge scored 0.6509). Added
+  graph_engine.reset_speaker() + cli.py reset command (requires --confirm)
+  for clearing test data safely. Full three-episode supersession round-trip
+  (San Francisco -> New York, job -> therapist) re-validated end-to-end
+  against live Nebius + Neo4j with a single canonical "User" entity and
+  correct city attribute supersession.
 
 ## Next up
 

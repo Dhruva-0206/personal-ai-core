@@ -7,6 +7,7 @@ Usage:
     python cli.py log "I moved to Austin"    # ingest one line
     python cli.py chat                       # interactive loop, one line at a time
     python cli.py history "Alex"             # show everything currently/previously true about an entity
+    python cli.py reset <speaker> --confirm  # delete all graph data for one speaker
 """
 import sys
 import logging
@@ -43,6 +44,22 @@ def cmd_chat():
         print("\nbye")
 
 
+def cmd_reset(speaker: str, args: list[str]):
+    if "--confirm" not in args:
+        print(f"WARNING: this will permanently delete ALL graph data for speaker "
+              f"'{speaker}' (every Entity, Episode, State, Action, and Relation "
+              f"scoped to it). Re-run with --confirm to proceed:\n"
+              f"    python cli.py reset {speaker} --confirm")
+        sys.exit(1)
+
+    driver = graph_engine.get_driver()
+    with driver.session() as session:
+        result = graph_engine.reset_speaker(session, speaker)
+    print(f"Reset complete for speaker '{speaker}': "
+          f"{result['nodes_deleted']} nodes, "
+          f"{result['relationships_deleted']} relationships deleted.")
+
+
 def cmd_history(entity_name: str):
     driver = graph_engine.get_driver()
     with driver.session() as session:
@@ -70,6 +87,8 @@ if __name__ == "__main__":
         cmd_chat()
     elif command == "history" and len(sys.argv) > 2:
         cmd_history(" ".join(sys.argv[2:]))
+    elif command == "reset" and len(sys.argv) > 2:
+        cmd_reset(sys.argv[2], sys.argv[3:])
     else:
         print(__doc__)
         sys.exit(1)

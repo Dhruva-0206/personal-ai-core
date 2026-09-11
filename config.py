@@ -39,6 +39,17 @@ NEO4J_PASSWORD = _get("NEO4J_PASSWORD")
 ENTITY_SIMILARITY_THRESHOLD = float(_get("ENTITY_SIMILARITY_THRESHOLD", "0.93"))
 ENTITY_SUBSTRING_MIN_LEN = int(_get("ENTITY_SUBSTRING_MIN_LEN", "3"))
 
+# Same idea as entity resolution, but for attribute names on a single
+# entity's own state history (e.g. "city" vs "location"). 0.72 chosen from
+# two data points — city/location (should-merge) scored 0.8034, city/job
+# (should-NOT-merge) scored 0.6509. This sits closer to the midpoint of
+# that gap rather than hugging the merge case, since we only have two
+# samples and false negatives (missed synonyms) are cheaper to catch
+# later than silent false merges. Revisit once more real attribute pairs
+# accumulate from actual usage.
+ATTRIBUTE_SIMILARITY_THRESHOLD = float(_get("ATTRIBUTE_SIMILARITY_THRESHOLD", "0.72"))
+ATTRIBUTE_SUBSTRING_MIN_LEN = int(_get("ATTRIBUTE_SUBSTRING_MIN_LEN", "3"))
+
 WEIGHT_SIMILARITY = float(_get("WEIGHT_SIMILARITY", "0.55"))
 WEIGHT_IMPORTANCE = float(_get("WEIGHT_IMPORTANCE", "0.35"))
 WEIGHT_RECENCY = float(_get("WEIGHT_RECENCY", "0.10"))
