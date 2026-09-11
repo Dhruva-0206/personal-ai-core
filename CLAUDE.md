@@ -57,7 +57,55 @@ retrieval-augmented reasoning about the user's evolving context.
   in time (expected behavior of the half-life formula, not a bug, but
   worth remembering when testing with freshly-logged data).
 
+- Phase 2 complete: added the two remaining retrieval lanes and merged all
+  three into one ranked result. fulltext_lane() queries the existing
+  episode_raw_text Neo4j fulltext index, min-max normalizing raw Lucene
+  scores into [FULLTEXT_SCORE_MIN, FULLTEXT_SCORE_MAX]=[0.40, 0.75].
+  recent_lane() is a safety net: the RECENT_LANE_MAX=2 most-recently-logged
+  episodes within RECENT_WINDOW_MINUTES=5 always get a fixed
+  RECENT_LANE_SCORE=0.25, so something-you-just-said stays retrievable
+  even with weak similarity/fulltext scores. retrieve() now runs all three
+  lanes unconditionally and merges by episode_id, keeping each candidate's
+  highest raw lane score and recording every contributing lane in a
+  "lanes" list.
+  Fixed a gap found during this work: the supersession penalty
+  (OUTDATED_STATE_PENALTY) previously only applied inside vector_search(),
+  so an episode surfaced only via fulltext or recent would dodge it
+  entirely. Extracted the state-status check into a shared
+  _episode_state_status() and moved the penalty to apply once per merged
+  candidate regardless of which lane(s) found it. This required recovering
+  vector_search's pre-penalty score before merging (dividing back out
+  OUTDATED_STATE_PENALTY) to avoid double-penalizing episodes that also
+  came through the vector lane — vector_search's own standalone behavior
+  is unchanged.
+  Attempted and reverted: a VECTOR_MIN_SIMILARITY=0.50 floor to exclude
+  weak vector-lane matches from counting as "this lane contributed" (was
+  making the "lanes" field misleading — e.g. a fully unrelated query still
+  showing "vector" due to embedding-space noise-floor similarity of
+  ~0.43-0.47). Testing showed genuine-match similarity (~0.46, e.g. New
+  York for "where do I currently live") and noise-floor similarity for
+  totally unrelated queries occupy the *same* range at this corpus size
+  (~4 test episodes) — excluding one reliably excluded the other too. The
+  floor shrank the New York vs San Francisco currency margin from a
+  decisive 0.239-0.366 down to a fragile 0.03, so it was reverted rather
+  than kept as a false sense of precision. The "lanes" field's meaning was
+  relabeled instead: it means "which lane(s) returned this candidate," not
+  "which lane(s) found it relevant" — read it alongside
+  similarity/importance/recency, not alone.
+  Known unresolved calibration questions, deferred pending real usage
+  data: (1) WEIGHT_SIMILARITY/IMPORTANCE/RECENCY (0.55/0.35/0.10) allow
+  high-importance-but-irrelevant episodes to outrank strong keyword
+  matches — observed with a "coffee" query losing to unrelated high-
+  importance episodes; (2) OUTDATED_STATE_PENALTY=0.5 is an unvalidated
+  guess; (3) recency provides no differentiation when episodes are close
+  in time (expected behavior of the half-life formula, not a bug, but
+  worth remembering when testing with freshly-logged data); (4)
+  VECTOR_MIN_SIMILARITY floor — attempted and reverted, revisit at larger
+  corpus size once embeddings have more natural separation to calibrate
+  against; (5) FULLTEXT_SCORE_MIN/MAX and RECENT_LANE_SCORE are all
+  guessed, none calibrated against real usage yet.
+
 ## Next up
 
-Phase 2 (remaining): full-text search lane, recency safety net lane,
-merge multiple lanes into one ranked result.
+Phase 3: agent & skills layer (tool-calling wired to memory + retrieval,
+tiered skill registry).

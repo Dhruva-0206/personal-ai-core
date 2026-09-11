@@ -62,6 +62,10 @@ def cmd_reset(speaker: str, args: list[str]):
           f"{result['relationships_deleted']} relationships deleted.")
 
 
+def _fmt(value):
+    return "n/a" if value is None else round(value, 3)
+
+
 def cmd_search(question: str):
     results = retrieval.retrieve(question)
     if not results:
@@ -70,10 +74,11 @@ def cmd_search(question: str):
     print(f"\nSearch results for '{question}':")
     for rank, r in enumerate(results, start=1):
         print(f"  #{rank}  combined_score={round(r['combined_score'], 3)}  "
-              f"similarity={round(r['similarity'], 3)}  "
+              f"similarity={_fmt(r['similarity'])}  "
               f"importance={r['importance']}  "
-              f"recency={round(r['recency'], 3)}  "
+              f"recency={_fmt(r['recency'])}  "
               f"state_status={r['state_status']}  "
+              f"lanes={r['lanes']}  "
               f"summary: {r['summary']}")
 
 

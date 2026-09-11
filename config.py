@@ -65,6 +65,28 @@ RECENCY_HALF_LIFE_DAYS = float(_get("RECENCY_HALF_LIFE_DAYS", "365"))
 # or too weak.
 OUTDATED_STATE_PENALTY = float(_get("OUTDATED_STATE_PENALTY", "0.5"))
 
+# Not currently applied as a filter — tested and reverted. At small corpus
+# sizes (~4 test episodes), genuine-match similarity (~0.46) and
+# noise-floor similarity for unrelated queries (~0.43-0.47) overlapped too
+# much for any single cutoff to separate cleanly (see CLAUDE.md). Revisit
+# once a real corpus with diverse content gives embeddings more natural
+# separation to calibrate against.
+VECTOR_MIN_SIMILARITY = float(_get("VECTOR_MIN_SIMILARITY", "0.50"))
+
+# Full-text lane: raw Lucene scores from the episode_raw_text index are
+# min-max normalized into this range so they're comparable to the vector
+# lane's 0-1ish combined_score. Both bounds are guessed, not calibrated.
+FULLTEXT_SCORE_MIN = float(_get("FULLTEXT_SCORE_MIN", "0.40"))
+FULLTEXT_SCORE_MAX = float(_get("FULLTEXT_SCORE_MAX", "0.75"))
+
+# Recency safety-net lane: guarantees something-you-just-said is always
+# retrievable even if it scores poorly on similarity/fulltext. Mirrors the
+# reference architecture we studied but is unvalidated for our own usage
+# patterns — guessed starting values.
+RECENT_WINDOW_MINUTES = int(_get("RECENT_WINDOW_MINUTES", "5"))
+RECENT_LANE_SCORE = float(_get("RECENT_LANE_SCORE", "0.25"))
+RECENT_LANE_MAX = int(_get("RECENT_LANE_MAX", "2"))
+
 # Namespace: every graph write/read is scoped to a speaker id so multiple
 # people (or test runs) never bleed into each other's memory.
 DEFAULT_SPEAKER = _get("DEFAULT_SPEAKER", "default")
