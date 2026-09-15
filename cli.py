@@ -10,10 +10,12 @@ Usage:
     python cli.py reset <speaker> --confirm  # delete all graph data for one speaker
     python cli.py search "where do I live"   # rank episodes by relevance (no LLM answer yet)
     python cli.py skill <name> --k v ...     # run a registered skill (high_stakes ones ask to confirm)
+    python cli.py agent "where do I live"    # let the model pick and invoke a skill from free text
 """
 import sys
 import logging
 
+import agent
 import graph_engine
 import pipeline
 import retrieval
@@ -99,6 +101,18 @@ def _parse_skill_args(argv: list[str]) -> dict:
     return kwargs
 
 
+def _confirm_and_run(name: str, kwargs: dict, description: str):
+    """Shared by the direct `skill` command and the `agent` command: print
+    the description, require an exact 'yes', then run the high_stakes skill."""
+    print(description)
+    answer = input("Type 'yes' to confirm, anything else to cancel: ")
+    if answer == "yes":
+        result = skills.confirm_skill(name, **kwargs)
+        print(result)
+    else:
+        print("Cancelled.")
+
+
 def cmd_skill(name: str, argv: list[str]):
     kwargs = _parse_skill_args(argv)
 
@@ -109,16 +123,21 @@ def cmd_skill(name: str, argv: list[str]):
 
     if skill.tier == "high_stakes":
         pending = skills.run_skill(name, **kwargs)
-        print(pending["description"])
-        answer = input("Type 'yes' to confirm, anything else to cancel: ")
-        if answer == "yes":
-            result = skills.confirm_skill(name, **kwargs)
-            print(result)
-        else:
-            print("Cancelled.")
+        _confirm_and_run(name, kwargs, pending["description"])
     else:
         result = skills.run_skill(name, **kwargs)
         print(result)
+
+
+def cmd_agent(user_message: str):
+    answer = agent.handle_request(user_message)
+    pending = agent.pending_confirmation
+    if pending is not None:
+        # answer == pending["description"] here; _confirm_and_run prints
+        # it, so don't print it twice.
+        _confirm_and_run(pending["name"], pending["args"], pending["description"])
+    else:
+        print(answer)
 
 
 def cmd_history(entity_name: str):
@@ -154,6 +173,8 @@ if __name__ == "__main__":
         cmd_search(" ".join(sys.argv[2:]))
     elif command == "skill" and len(sys.argv) > 2:
         cmd_skill(sys.argv[2], sys.argv[3:])
+    elif command == "agent" and len(sys.argv) > 2:
+        cmd_agent(" ".join(sys.argv[2:]))
     else:
         print(__doc__)
         sys.exit(1)

@@ -133,8 +133,49 @@ retrieval-augmented reasoning about the user's evolving context.
   currently invoked by name via CLI flag, not chosen autonomously by the
   LLM from natural language. That's the next piece of work.
 
+- Phase 3: added agent.py — the actual agent loop. handle_request() sends
+  the user's free-form message to Nemotron with tools=skills.to_openai_tools()
+  (added to skills.py, generating the OpenAI function-calling tool schema
+  from the registry automatically so it can't drift out of sync). If the
+  model answers directly (finish_reason != "tool_calls"), that answer is
+  returned as-is. If it calls a tool, only the first tool_call in that
+  turn is handled (known limitation — no parallel/sequential multi-tool
+  yet); its result goes through skills.run_skill() exactly like the direct
+  CLI path. A high_stakes result triggers a second model call with the
+  tool result appended (standard OpenAI tool-role message) to produce the
+  final natural-language answer.
+  Corrected an earlier assumption from initial planning: isolated testing
+  (test_tool_calling.py, 3 separate calls) verified that
+  nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B does NOT expose reasoning_content
+  at all when using native tool-calling — the attribute doesn't exist on
+  the message object in that mode, and content=None there just means the
+  model chose to call a tool, not the reasoning-mode issue originally
+  flagged. llm_client.py's _message_text() comment corrected accordingly;
+  its defensive reasoning_content fallback logic is unchanged (kept as
+  cheap insurance for untested model variants/call shapes, not because
+  reasoning_content was confirmed to occur).
+  Validated against live Nebius + Neo4j, three scenarios: (1) confirmation
+  gate holds even when the agent — not a human — initiates a high-stakes
+  action (make_purchase correctly stopped and asked for exact "yes" before
+  executing); (2) the model does not force an unnecessary tool call for
+  plain conversation ("hello, how are you" got a direct answer, no tool
+  call); (3) when handed a wrong/irrelevant memory result, the model
+  reported that honestly instead of hallucinating a plausible-sounding
+  answer.
+  Known limitations: only one tool call handled per turn; the pending
+  high-stakes confirmation state (agent.pending_confirmation) is a single
+  module-level global, not scoped per-session — fine for a single-user
+  CLI, worth revisiting once "always-on"/multi-user is actually built.
+  query_memory has now failed the same way three separate times across
+  three different validation contexts (Phase 2 scoring test, Phase 3
+  foundation validation, Phase 3 agent-loop validation) — high-importance-
+  but-irrelevant episodes consistently outrank genuinely relevant ones.
+  This is no longer "wait for more data" territory; it's a reproducible
+  structural issue in the scoring weights. Next up: fix this before
+  building further on top of retrieval/agent.
+
 ## Next up
 
-Phase 3 continued: actual agent loop — Nemotron selecting and invoking
-skills from free-form natural language requests, handling the
-reasoning_content/tool-calling behavior flagged during initial planning.
+Fix the importance-weighting issue in retrieval.py's scoring formula —
+now has 3 reproducible failure instances, enough evidence to act on
+rather than defer further.

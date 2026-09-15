@@ -27,6 +27,7 @@ class Skill:
     tier: str
     description: str
     func: Callable[..., dict]
+    parameters: dict
 
 
 REGISTRY: dict[str, Skill] = {}
@@ -73,19 +74,55 @@ register(Skill(
     tier="read_only",
     description="Look up the most relevant stored memory for a question",
     func=_query_memory,
+    parameters={
+        "type": "object",
+        "properties": {"question": {"type": "string"}},
+        "required": ["question"],
+    },
 ))
 register(Skill(
     name="set_reminder",
     tier="reversible_write",
     description="Set a reminder",
     func=_set_reminder,
+    parameters={
+        "type": "object",
+        "properties": {
+            "text": {"type": "string"},
+            "time": {"type": "string"},
+        },
+        "required": ["text", "time"],
+    },
 ))
 register(Skill(
     name="make_purchase",
     tier="high_stakes",
     description="Make a purchase",
     func=_make_purchase,
+    parameters={
+        "type": "object",
+        "properties": {
+            "item": {"type": "string"},
+            "price": {"type": "string"},
+        },
+        "required": ["item", "price"],
+    },
 ))
+
+
+def to_openai_tools() -> list[dict]:
+    """Builds the OpenAI function-calling "tools" list from the registry automatically."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": skill.name,
+                "description": skill.description,
+                "parameters": skill.parameters,
+            },
+        }
+        for skill in REGISTRY.values()
+    ]
 
 
 def _describe(skill: Skill, kwargs: dict) -> str:
