@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Personal AI Memory</title>
+<style>
+  body {
+    font-family: -apple-system, Segoe UI, Arial, sans-serif;
+    max-width: 700px;
+    margin: 40px auto;
+    padding: 0 16px;
+    color: #222;
+    background: #fafafa;
+  }
+  h1 { font-size: 22px; }
+  h2 { font-size: 16px; margin-bottom: 8px; }
+  section { margin-bottom: 28px; }
+  textarea, input[type=text] {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px;
+    font-size: 14px;
+    font-family: inherit;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+  }
+  button {
+    padding: 8px 16px;
+    margin-top: 8px;
+    cursor: pointer;
+    border: 1px solid #888;
+    border-radius: 4px;
+    background: #fff;
+  }
+  button:hover { background: #eee; }
+  .message {
+    background: #eef3ff;
+    border: 1px solid #9ab4e6;
+    padding: 12px;
+    margin-bottom: 20px;
+    border-radius: 4px;
+    white-space: pre-wrap;
+  }
+  .message.error {
+    background: #fdecec;
+    border-color: #d99;
+  }
+  .confirm-box {
+    background: #fff8dc;
+    border: 1px solid #d9c56a;
+    padding: 12px;
+    margin-bottom: 20px;
+    border-radius: 4px;
+  }
+  .confirm-box form { display: inline-block; margin-right: 8px; }
+  .memory {
+    border-bottom: 1px solid #ddd;
+    padding: 8px 0;
+  }
+  .memory .importance {
+    color: #888;
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+
+<h1>Personal AI Memory</h1>
+
+{% if message %}
+<div class="message{% if message.is_error %} error{% endif %}">{{ message.text }}</div>
+{% endif %}
+
+{% if pending %}
+<div class="confirm-box">
+  <p>{{ pending.description }}</p>
+  <form method="post" action="/confirm">
+    <input type="hidden" name="action" value="yes">
+    <button type="submit">Confirm</button>
+  </form>
+  <form method="post" action="/confirm">
+    <input type="hidden" name="action" value="no">
+    <button type="submit">Cancel</button>
+  </form>
+</div>
+{% endif %}
+
+<section>
+  <h2>Log something</h2>
+  <form method="post" action="/log">
+    <textarea name="text" rows="3" placeholder="What's on your mind?"></textarea>
+    <button type="submit">Log</button>
+  </form>
+</section>
+
+<section>
+  <h2>Ask</h2>
+  <form method="post" action="/ask">
+    <input type="text" name="question" placeholder="Ask a question...">
+    <button type="submit">Ask</button>
+  </form>
+</section>
+
+<section>
+  <h2>Recent memories</h2>
+  {% if recent_episodes %}
+    {% for ep in recent_episodes %}
+    <div class="memory">
+      <div>{{ ep.summary }}</div>
+      <div class="importance">importance: {{ ep.importance }}</div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <p>No memories yet.</p>
+  {% endif %}
+</section>
+
+</body>
+</html>

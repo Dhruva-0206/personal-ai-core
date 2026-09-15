@@ -291,6 +291,18 @@ def reset_speaker(session, speaker: str) -> dict:
     }
 
 
+def get_recent_episodes(session, speaker: str, limit: int = 10) -> list[dict]:
+    """The most recent Episode nodes for this speaker, newest first."""
+    rows = session.run(
+        "MATCH (ep:Episode {speaker: $speaker}) "
+        "RETURN ep.id AS episode_id, ep.summary AS summary, "
+        "ep.importance AS importance, ep.timestamp AS timestamp "
+        "ORDER BY ep.timestamp DESC LIMIT $limit",
+        speaker=speaker, limit=limit,
+    )
+    return [dict(row) for row in rows]
+
+
 def entity_history(session, speaker: str, entity_name: str) -> list[dict]:
     """All states (active and superseded) for an entity, newest first — a quick sanity check tool."""
     rows = session.run(

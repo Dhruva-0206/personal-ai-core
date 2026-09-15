@@ -263,15 +263,30 @@ retrieval-augmented reasoning about the user's evolving context.
   actual point: real usage will accumulate real frequency data over time
   instead of leaving this at two anecdotes.
 
+- Added a minimal local web interface (web_app.py, templates/index.html)
+  wrapping the existing pipeline/retrieval/agent code unchanged — Flask,
+  server-rendered Jinja, no JavaScript, no external CDN dependencies, so
+  it stays fully offline-reliable. GET / shows a log form, an ask form,
+  the 10 most recent memories (via graph_engine.get_recent_episodes(), a
+  new read-only addition), and — when agent.pending_confirmation is set —
+  a Confirm/Cancel UI for high-stakes actions. POST /log, /ask, and
+  /confirm call pipeline.ingest_episode(), agent.handle_request(), and
+  skills.confirm_skill() respectively, then re-render the same page.
+  Validated end-to-end via Flask's test_client() (test_web_app.py, kept
+  in the repo): logging a memory, seeing it appear in the recent list,
+  asking a factual question and getting the direct_state_lookup answer
+  through this interface unchanged, and the full high-stakes
+  confirm/cancel flow (pending state shown, cancel takes no action,
+  confirm actually executes) — all confirmed working before this commit.
+
 ## Next up
 
-Phase 3 fully closed: memory, retrieval (including direct factual
-lookup), and a tiered agent/skill layer are all validated end-to-end
-against live infra. Two known deferred issues remain logged, not
-blocking: (1) stray-entity misattribution when multiple entities appear
-in one episode, (2) importance-weighting still affects EXPLORATORY
-(non-factual) queries — only factual lookups are fixed by
-direct_state_lookup. Next: Phase 4 — a real interface (the hackathon's
-own Design judging criterion needs more than a CLI), or begin real
-ingestion adapters (calendar/location) per the original build order —
-decide together before starting.
+Start real daily use through the web interface (python web_app.py,
+http://127.0.0.1:5000/) to begin generating real usage data for the
+deferred calibration questions (importance-weighting on exploratory
+queries, attribute-similarity threshold, outdated-state penalty) — these
+can now be revisited with real data instead of synthetic test episodes.
+Remaining known issues: stray-entity misattribution when multiple
+entities appear in one episode; rare agent tool-calling failures now have
+a retry safety net but true frequency is still unknown pending real
+usage.
