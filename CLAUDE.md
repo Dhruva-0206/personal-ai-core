@@ -234,6 +234,35 @@ retrieval-augmented reasoning about the user's evolving context.
   (Stray-entity misattribution bug noted above is unchanged by this work —
   still logged, still not fixed.)
 
+- Added detection and a single automatic retry in agent.py's
+  handle_request() for two observed non-tool-calling failure modes: a
+  hallucinated fake tool-call written as plain text (literal "<tool_call>"
+  in message.content) and an explicit refusal to use any tool (narrow,
+  literal match on one observed phrasing — "I can't help with that
+  question using the available tools" — known to miss rephrased refusals,
+  not generalized with fuzzy matching or another LLM call by design).
+  Detection only ever activates when finish_reason != "tool_calls", so
+  the normal successful path is untouched. On detection: log a WARNING
+  with the full raw content, retry the identical request once, and use
+  whatever comes back as final — if the retry also fails the same check,
+  log a second WARNING (so persistent failures are visible) but never
+  retry a second time.
+  This is defensive/insurance code for a rare, confirmed-but-not-
+  precisely-quantified failure rate — same framing as the
+  reasoning_content defensive check in llm_client.py. A controlled n=10
+  batch of agent.handle_request("where do I live") showed 0/10 failures
+  (see test_agent_reliability.py), but two real instances (one of each
+  failure mode) were captured verbatim during earlier ad hoc testing, so
+  the true rate is non-zero but not pinned down by this sample size. The
+  retry logic itself was verified in isolation with deliberately
+  constructed fake response objects (test_agent_retry_isolated.py, 4
+  scenarios / 8 checks, all passing) — hallucinated-text retry-and-
+  succeed, refusal retry-and-succeed, persistent-failure-no-second-retry,
+  and normal-path-unaffected — independent of whether the live model
+  happens to fail during any given test run. The WARNING logs are the
+  actual point: real usage will accumulate real frequency data over time
+  instead of leaving this at two anecdotes.
+
 ## Next up
 
 Phase 3 fully closed: memory, retrieval (including direct factual

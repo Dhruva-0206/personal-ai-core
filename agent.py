@@ -6,10 +6,13 @@ directly. The tiered confirmation gate from skills.py is NOT bypassed here
 exactly as it does on the direct CLI path.
 """
 import json
+import logging
 
 import config
 import llm_client
 import skills
+
+logger = logging.getLogger(__name__)
 
 # Set by handle_request() only when it returns a needs_confirmation
 # description, holding what's needed to actually run the skill afterward
@@ -18,6 +21,28 @@ import skills
 # confirm-and-run code path the direct `skill` command uses, instead of
 # trying to re-parse the returned description string. None otherwise.
 pending_confirmation: dict | None = None
+
+# Narrow, literal match for one observed refusal phrasing (see
+# test_agent_reliability.py). This is likely to miss rephrased refusals —
+# that's an accepted limitation for now, not something to generalize with
+# fuzzy matching or another LLM call. It's a detection signal for logging
+# and a single retry, not an attempt to fix the model's underlying
+# behavior.
+_REFUSAL_PHRASE = "I can't help with that question using the available tools"
+
+
+def _is_known_tool_calling_failure(finish_reason, content: str | None) -> bool:
+    """
+    True for either of the two observed non-tool-calling failure modes:
+    a hallucinated fake tool-call written as plain text (contains a
+    literal "<tool_call>"), or an explicit refusal to use any tool
+    (matches _REFUSAL_PHRASE). Only ever meaningful when finish_reason is
+    already not "tool_calls" — a normal successful tool call always
+    short-circuits here and is completely unaffected.
+    """
+    if finish_reason == "tool_calls" or not content:
+        return False
+    return "<tool_call>" in content or _REFUSAL_PHRASE in content
 
 
 def handle_request(user_message: str, speaker: str = None) -> str:
@@ -33,8 +58,33 @@ def handle_request(user_message: str, speaker: str = None) -> str:
         tools=skills.to_openai_tools(),
     )
     message = response.choices[0].message
+    finish_reason = response.choices[0].finish_reason
 
-    if response.choices[0].finish_reason != "tool_calls":
+    if _is_known_tool_calling_failure(finish_reason, message.content):
+        logger.warning(
+            "Agent tool-calling failure detected (finish_reason=%r) — "
+            "retrying once. Raw content: %r",
+            finish_reason, message.content,
+        )
+        # Same request, retried exactly once. Whatever comes back is used
+        # as final — no second retry, and the retry's own result is not
+        # re-checked for triggering another retry (avoids a retry loop).
+        response = client.chat.completions.create(
+            model=config.EXTRACTION_MODEL,
+            messages=messages,
+            tools=skills.to_openai_tools(),
+        )
+        message = response.choices[0].message
+        finish_reason = response.choices[0].finish_reason
+        if _is_known_tool_calling_failure(finish_reason, message.content):
+            logger.warning(
+                "Agent tool-calling failure persisted after retry "
+                "(finish_reason=%r) — proceeding anyway, not retrying "
+                "again. Raw content: %r",
+                finish_reason, message.content,
+            )
+
+    if finish_reason != "tool_calls":
         return message.content
 
     # Known limitation: only the first tool call is handled. A model
