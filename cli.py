@@ -66,6 +66,20 @@ def cmd_reset(speaker: str, args: list[str]):
           f"{result['relationships_deleted']} relationships deleted.")
 
 
+def _safe_print(text):
+    """
+    Print text that may contain arbitrary LLM-generated characters (emoji,
+    etc.) without crashing on a Windows console using a legacy codepage
+    (e.g. cp1252) that can't encode them — unencodable characters degrade
+    to a replacement character instead of raising UnicodeEncodeError.
+    """
+    text = str(text)
+    encoding = sys.stdout.encoding or "utf-8"
+    sys.stdout.buffer.write(text.encode(encoding, errors="replace"))
+    sys.stdout.buffer.write(b"\n")
+    sys.stdout.buffer.flush()
+
+
 def _fmt(value):
     return "n/a" if value is None else round(value, 3)
 
@@ -104,11 +118,11 @@ def _parse_skill_args(argv: list[str]) -> dict:
 def _confirm_and_run(name: str, kwargs: dict, description: str):
     """Shared by the direct `skill` command and the `agent` command: print
     the description, require an exact 'yes', then run the high_stakes skill."""
-    print(description)
+    _safe_print(description)
     answer = input("Type 'yes' to confirm, anything else to cancel: ")
     if answer == "yes":
         result = skills.confirm_skill(name, **kwargs)
-        print(result)
+        _safe_print(result)
     else:
         print("Cancelled.")
 
@@ -126,7 +140,7 @@ def cmd_skill(name: str, argv: list[str]):
         _confirm_and_run(name, kwargs, pending["description"])
     else:
         result = skills.run_skill(name, **kwargs)
-        print(result)
+        _safe_print(result)
 
 
 def cmd_agent(user_message: str):
@@ -137,7 +151,7 @@ def cmd_agent(user_message: str):
         # it, so don't print it twice.
         _confirm_and_run(pending["name"], pending["args"], pending["description"])
     else:
-        print(answer)
+        _safe_print(answer)
 
 
 def cmd_history(entity_name: str):

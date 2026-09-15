@@ -174,8 +174,75 @@ retrieval-augmented reasoning about the user's evolving context.
   structural issue in the scoring weights. Next up: fix this before
   building further on top of retrieval/agent.
 
+- Found via direct_state_lookup validation: an existing job=therapist
+  State is attached to an entity literally named 'therapist' instead of
+  'User' — the extraction step occasionally misattributes which entity a
+  state belongs to when multiple entities appear in one episode (here:
+  'User' and 'therapist' both extracted from the same sentence, state
+  attached to the wrong one). This is a different fragility class than the
+  self-reference or attribute-naming issues already fixed — those were
+  about naming consistency for the SAME entity; this is about the model
+  choosing the WRONG entity as the subject of a state. Not fixed yet —
+  needs its own dedicated design pass (a prompt nudge alone, per the
+  self-reference/attribute-naming precedent, likely isn't sufficient on
+  its own here since there's no fixed vocabulary to normalize against).
+  Deferred, not blocking the direct_state_lookup fix since it doesn't
+  affect the city/location case.
+
+- Phase 3 complete: fixed the recurring importance-weighting failure for
+  direct factual questions with a new retrieval.py path,
+  direct_state_lookup(), that runs before fuzzy retrieval and answers from
+  the graph's known current state instead of ranking episodes.
+  Diagnostic finding that drove this: raw vector similarity does not
+  distinguish relevant-but-differently-phrased facts from irrelevant
+  ones. Measured directly — for "where do I currently live", the
+  superseded "I live in San Francisco" episode scored 0.624 similarity
+  while the actually-correct "I moved to New York last week" episode
+  scored 0.457, a mere 0.0007 away from a completely unrelated episode
+  ("My job changed to therapist," 0.4565) — a 233x smaller gap than the
+  0.167 separating San Francisco from New York. Similarity was tracking
+  surface lexical overlap ("I live in..." vs "where do I live"), not
+  semantic correctness.
+  Tried and abandoned: reusing embedding cosine similarity (matching
+  graph_engine.resolve_attribute()'s pattern) to map a full question onto
+  a known attribute name. Tested directly: "where do I currently live" vs
+  "city" scored 0.577, below the 0.72 ATTRIBUTE_SIMILARITY_THRESHOLD, so
+  it would have missed the exact case it was built for, while "what
+  happened with my job" vs "job" happened to clear the threshold at 0.80
+  — a threshold that passes one phrasing and fails another isn't a real
+  fix, and a full-sentence-vs-single-word embedding comparison isn't the
+  same kind of comparison ATTRIBUTE_SIMILARITY_THRESHOLD was calibrated
+  for. Same lesson as the earlier VECTOR_MIN_SIMILARITY floor experiment:
+  signal and noise overlap too much at this scale for a bare similarity
+  cutoff to separate them reliably.
+  Chosen instead: LLM classification against the speaker's actual known
+  attribute vocabulary (queried fresh from the graph each call), with the
+  model's answer strictly validated to be one of those exact strings or
+  null — never trusted if it names anything outside that list. Full-
+  sentence understanding succeeds where geometry on short strings didn't,
+  and the closed vocabulary makes hallucinated attribute names structurally
+  impossible rather than just unlikely.
+  direct_state_lookup() runs first but does NOT replace fuzzy retrieval —
+  the three lanes (vector/fulltext/recent) still run every call and still
+  matter for non-factual, exploratory questions where there's no single
+  known-attribute answer to look up directly.
+  Also fixed: a Windows console crash (UnicodeEncodeError) when an agent
+  or skill result containing an emoji or other non-cp1252 character hit a
+  plain print() — cli.py now has a _safe_print() that encodes with
+  errors="replace" so unencodable characters degrade to a replacement
+  character instead of crashing the program.
+  (Stray-entity misattribution bug noted above is unchanged by this work —
+  still logged, still not fixed.)
+
 ## Next up
 
-Fix the importance-weighting issue in retrieval.py's scoring formula —
-now has 3 reproducible failure instances, enough evidence to act on
-rather than defer further.
+Phase 3 fully closed: memory, retrieval (including direct factual
+lookup), and a tiered agent/skill layer are all validated end-to-end
+against live infra. Two known deferred issues remain logged, not
+blocking: (1) stray-entity misattribution when multiple entities appear
+in one episode, (2) importance-weighting still affects EXPLORATORY
+(non-factual) queries — only factual lookups are fixed by
+direct_state_lookup. Next: Phase 4 — a real interface (the hackathon's
+own Design judging criterion needs more than a CLI), or begin real
+ingestion adapters (calendar/location) per the original build order —
+decide together before starting.

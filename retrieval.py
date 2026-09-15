@@ -172,6 +172,110 @@ def recent_lane(session, speaker: str) -> list[dict]:
     ]
 
 
+_ATTRIBUTE_CLASSIFY_PROMPT_TEMPLATE = """You are matching a user's question to one of their known tracked \
+attributes. Known attributes: {attributes}.
+
+Given the question, identify which ONE attribute (if any) the question is \
+asking about. Respond with ONLY valid JSON, no prose, no markdown code \
+fences, in exactly this shape: {{"attribute": "<one of the known attributes>"}} \
+or {{"attribute": null}} if none of them apply. Never invent an attribute \
+name that is not in the provided list — only ever return one of the exact \
+strings given, or null."""
+
+
+def match_question_to_attribute(session, speaker: str, question: str) -> str | None:
+    """
+    Layers 1-2 are cheap and deterministic (exact match, then substring
+    containment against known attribute names) — proven correct via the
+    "job" case, which was resolved by substring matching alone and never
+    needed anything past this fast path.
+
+    Layer 3 is an LLM classification call against the speaker's known
+    attribute vocabulary, only triggered when the fast path finds nothing.
+    An embedding cosine similarity comparison between a full question and
+    a single attribute-name word was tried here first and rejected — see
+    CLAUDE.md for the observed scores showing it doesn't separate genuine
+    matches from noise at the ATTRIBUTE_SIMILARITY_THRESHOLD calibrated for
+    attribute-vs-attribute comparisons (that threshold is untouched by this
+    function now; it's still used, unchanged, by graph_engine.resolve_attribute).
+    """
+    question_lower = question.strip().lower()
+
+    # Layer 1: exact match, case-insensitive
+    result = session.run(
+        "MATCH (:Entity {speaker: $speaker})-[:OF_ENTITY]-(s:State) "
+        "WHERE toLower(s.attribute) = $question_lower "
+        "RETURN DISTINCT s.attribute AS attribute LIMIT 1",
+        speaker=speaker, question_lower=question_lower,
+    ).single()
+    if result:
+        return result["attribute"]
+
+    # Layer 2: substring containment (longest existing attribute wins)
+    if len(question_lower) >= config.ATTRIBUTE_SUBSTRING_MIN_LEN:
+        result = session.run(
+            "MATCH (:Entity {speaker: $speaker})-[:OF_ENTITY]-(s:State) "
+            "WHERE toLower(s.attribute) CONTAINS $question_lower OR $question_lower CONTAINS toLower(s.attribute) "
+            "RETURN DISTINCT s.attribute AS attribute ORDER BY size(s.attribute) DESC LIMIT 1",
+            speaker=speaker, question_lower=question_lower,
+        ).single()
+        if result:
+            return result["attribute"]
+
+    # Layer 3: LLM classification against the known attribute vocabulary
+    rows = session.run(
+        "MATCH (:Entity {speaker: $speaker})-[:OF_ENTITY]-(s:State) "
+        "RETURN DISTINCT s.attribute AS attribute",
+        speaker=speaker,
+    )
+    known_attributes = [row["attribute"] for row in rows]
+    if not known_attributes:
+        return None
+
+    system_prompt = _ATTRIBUTE_CLASSIFY_PROMPT_TEMPLATE.format(attributes=known_attributes)
+    classification = llm_client.extract_json(system_prompt, question)
+    candidate = classification.get("attribute")
+    if candidate in known_attributes:
+        return candidate
+    return None
+
+
+def direct_state_lookup(session, speaker: str, question: str) -> dict | None:
+    """
+    Checks known active states before falling back to fuzzy multi-lane
+    search. Scoped across ALL of this speaker's entities (not hardcoded to
+    "User") so it generalizes beyond the self-referential case — matches
+    match_question_to_attribute()'s scope and doesn't bake in an assumption
+    about which entity name self-reference normalization happens to use.
+
+    Returns None (not a guess) whenever the match is ambiguous: no
+    attribute match, no active state for that attribute, or more than one
+    active state for it (e.g. the same attribute active on two different
+    entities).
+    """
+    attribute = match_question_to_attribute(session, speaker, question)
+    if attribute is None:
+        return None
+
+    rows = list(session.run(
+        "MATCH (e:Entity {speaker: $speaker})-[:OF_ENTITY]-(s:State {attribute: $attribute}) "
+        "WHERE s.active = true "
+        "RETURN e.name AS entity, s.value AS value",
+        speaker=speaker, attribute=attribute,
+    ))
+    if len(rows) != 1:
+        return None
+
+    row = rows[0]
+    return {
+        "source": "direct_lookup",
+        "attribute": attribute,
+        "value": row["value"],
+        "entity": row["entity"],
+        "confidence": "high",
+    }
+
+
 # lanes means "which lane(s) returned this candidate", not "which lane(s)
 # found it relevant" — use the similarity/importance/recency fields
 # alongside it to judge actual relevance, not lanes membership alone.
@@ -188,6 +292,13 @@ def _merge_candidate(merged: dict, episode_id: str, raw_score: float, lane: str,
 
 def retrieve(question: str, speaker: str = None, top_k: int = 12) -> list[dict]:
     """
+    Checks direct_state_lookup() first — if the question maps unambiguously
+    to one known active state, that's prepended to the front of the
+    results with combined_score=1.0 and lanes=["direct_state_lookup"]. The
+    three fuzzy lanes below still run and merge exactly as before either
+    way; direct lookup only ever adds a result, never replaces the fuzzy
+    pass.
+
     Runs all three lanes unconditionally, merges by episode_id (keeping the
     highest raw lane score and recording every contributing lane), applies
     the supersession penalty exactly once per merged candidate regardless
@@ -203,6 +314,8 @@ def retrieve(question: str, speaker: str = None, top_k: int = 12) -> list[dict]:
     query_embedding = llm_client.embed(question)
     driver = graph_engine.get_driver()
     with driver.session() as session:
+        direct_result = direct_state_lookup(session, speaker, question)
+
         vector_results = vector_search(session, speaker, query_embedding, top_k=top_k)
         fulltext_results = fulltext_lane(session, speaker, question, limit=top_k)
         recent_results = recent_lane(session, speaker)
@@ -261,4 +374,22 @@ def retrieve(question: str, speaker: str = None, top_k: int = 12) -> list[dict]:
             })
 
         final_results.sort(key=lambda r: r["combined_score"], reverse=True)
+
+        if direct_result is not None:
+            final_results.insert(0, {
+                "episode_id": None,
+                "raw_text": None,
+                "summary": f"{direct_result['entity']}: {direct_result['attribute']} = {direct_result['value']}",
+                "importance": None,
+                "similarity": None,
+                "recency": None,
+                "combined_score": 1.0,
+                "state_status": "current",
+                "lanes": ["direct_state_lookup"],
+                "attribute": direct_result["attribute"],
+                "value": direct_result["value"],
+                "entity": direct_result["entity"],
+                "confidence": direct_result["confidence"],
+            })
+
         return final_results[:top_k]
