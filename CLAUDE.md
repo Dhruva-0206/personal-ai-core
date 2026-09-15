@@ -105,7 +105,36 @@ retrieval-augmented reasoning about the user's evolving context.
   against; (5) FULLTEXT_SCORE_MIN/MAX and RECENT_LANE_SCORE are all
   guessed, none calibrated against real usage yet.
 
+- Phase 3 foundation: added skills.py — a tiered skill registry
+  (read_only / reversible_write / high_stakes) with a confirmation gate
+  for high-stakes actions. Three skills registered: query_memory
+  (read_only, REAL — wired to retrieval.retrieve()), set_reminder
+  (reversible_write, STUB — prints + returns a confirmation dict, no real
+  persistence/scheduling yet), make_purchase (high_stakes, STUB — same
+  pattern, no real purchasing integration yet). run_skill() executes
+  read_only and reversible_write immediately; for high_stakes it returns a
+  "needs_confirmation" dict with a human-readable description instead of
+  executing, and only an explicit confirm_skill() call (gated on the CLI
+  by an exact-match "yes" prompt) actually runs it. Added cli.py skill
+  command wiring this up end to end.
+  Validated against live Nebius + Neo4j: read-only executes immediately
+  with no prompt; reversible-write executes immediately and includes a
+  "Reversible action - executed without confirmation by design" note;
+  high-stakes blocks correctly on anything but exact "yes" (answering "no"
+  produced "Cancelled." with no side effect; answering "yes" on a second
+  run correctly executed and printed "Purchase would execute...").
+  query_memory inherits the known importance-weighting issue from Phase 2
+  retrieval — surfaced a high-importance-but-irrelevant episode (job
+  change, importance 0.8) instead of the actually-relevant one (New York,
+  the current city) when asked "where do I live" during validation. Not
+  fixed, same reasoning as before (needs real usage data, not more
+  synthetic tuning).
+  This is the skill-execution mechanism only, NOT an agent — skills are
+  currently invoked by name via CLI flag, not chosen autonomously by the
+  LLM from natural language. That's the next piece of work.
+
 ## Next up
 
-Phase 3: agent & skills layer (tool-calling wired to memory + retrieval,
-tiered skill registry).
+Phase 3 continued: actual agent loop — Nemotron selecting and invoking
+skills from free-form natural language requests, handling the
+reasoning_content/tool-calling behavior flagged during initial planning.

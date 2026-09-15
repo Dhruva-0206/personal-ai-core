@@ -9,6 +9,7 @@ Usage:
     python cli.py history "Alex"             # show everything currently/previously true about an entity
     python cli.py reset <speaker> --confirm  # delete all graph data for one speaker
     python cli.py search "where do I live"   # rank episodes by relevance (no LLM answer yet)
+    python cli.py skill <name> --k v ...     # run a registered skill (high_stakes ones ask to confirm)
 """
 import sys
 import logging
@@ -16,6 +17,7 @@ import logging
 import graph_engine
 import pipeline
 import retrieval
+import skills
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -82,6 +84,43 @@ def cmd_search(question: str):
               f"summary: {r['summary']}")
 
 
+def _parse_skill_args(argv: list[str]) -> dict:
+    kwargs = {}
+    i = 0
+    while i < len(argv):
+        token = argv[i]
+        if not token.startswith("--"):
+            raise ValueError(f"Expected a --flag, got '{token}'")
+        key = token[2:]
+        if i + 1 >= len(argv):
+            raise ValueError(f"Missing value for --{key}")
+        kwargs[key] = argv[i + 1]
+        i += 2
+    return kwargs
+
+
+def cmd_skill(name: str, argv: list[str]):
+    kwargs = _parse_skill_args(argv)
+
+    skill = skills.REGISTRY.get(name)
+    if skill is None:
+        print(f"Unknown skill: '{name}'. Registered skills: {sorted(skills.REGISTRY)}")
+        sys.exit(1)
+
+    if skill.tier == "high_stakes":
+        pending = skills.run_skill(name, **kwargs)
+        print(pending["description"])
+        answer = input("Type 'yes' to confirm, anything else to cancel: ")
+        if answer == "yes":
+            result = skills.confirm_skill(name, **kwargs)
+            print(result)
+        else:
+            print("Cancelled.")
+    else:
+        result = skills.run_skill(name, **kwargs)
+        print(result)
+
+
 def cmd_history(entity_name: str):
     driver = graph_engine.get_driver()
     with driver.session() as session:
@@ -113,6 +152,8 @@ if __name__ == "__main__":
         cmd_reset(sys.argv[2], sys.argv[3:])
     elif command == "search" and len(sys.argv) > 2:
         cmd_search(" ".join(sys.argv[2:]))
+    elif command == "skill" and len(sys.argv) > 2:
+        cmd_skill(sys.argv[2], sys.argv[3:])
     else:
         print(__doc__)
         sys.exit(1)
