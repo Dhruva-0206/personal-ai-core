@@ -239,6 +239,24 @@ def match_question_to_attribute(session, speaker: str, question: str) -> str | N
         return candidate
     return None
 
+def _is_historical_question(question: str) -> bool:
+    """
+    Detect whether the user is explicitly asking about a previous
+    or historical state rather than the current state.
+    """
+    question_lower = question.strip().lower()
+
+    historical_markers = (
+        "previous",
+        "before",
+        "prior",
+        "used to",
+        "formerly",
+        "earlier",
+    )
+
+    return any(marker in question_lower for marker in historical_markers)
+
 
 def direct_state_lookup(session, speaker: str, question: str) -> dict | None:
     """
@@ -275,6 +293,44 @@ def direct_state_lookup(session, speaker: str, question: str) -> dict | None:
         "confidence": "high",
     }
 
+def historical_state_lookup(session, speaker: str, question: str) -> dict | None:
+    """
+    Return the most recently superseded state for the attribute referenced
+    by a historical question.
+
+    Example:
+        Software Engineer -> Data Scientist
+
+        "What was my previous job?"
+        returns "Software Engineer".
+    """
+    attribute = match_question_to_attribute(session, speaker, question)
+    if attribute is None:
+        return None
+
+    rows = list(session.run(
+        "MATCH (e:Entity {speaker: $speaker})-[:OF_ENTITY]-(s:State {attribute: $attribute}) "
+        "WHERE s.active = false "
+        "RETURN e.name AS entity, s.value AS value, "
+        "s.created_at AS created_at, s.superseded_at AS superseded_at "
+        "ORDER BY s.created_at DESC",
+        speaker=speaker,
+        attribute=attribute,
+    ))
+
+    if len(rows) != 1:
+        return None
+
+    row = rows[0]
+
+    return {
+        "source": "historical_state_lookup",
+        "attribute": attribute,
+        "value": row["value"],
+        "entity": row["entity"],
+        "confidence": "high",
+    }
+
 
 # lanes means "which lane(s) returned this candidate", not "which lane(s)
 # found it relevant" — use the similarity/importance/recency fields
@@ -292,75 +348,144 @@ def _merge_candidate(merged: dict, episode_id: str, raw_score: float, lane: str,
 
 def retrieve(question: str, speaker: str = None, top_k: int = 12) -> list[dict]:
     """
-    Checks direct_state_lookup() first — if the question maps unambiguously
-    to one known active state, that's prepended to the front of the
-    results with combined_score=1.0 and lanes=["direct_state_lookup"]. The
-    three fuzzy lanes below still run and merge exactly as before either
-    way; direct lookup only ever adds a result, never replaces the fuzzy
-    pass.
+    Checks for direct state retrieval first.
 
-    Runs all three lanes unconditionally, merges by episode_id (keeping the
-    highest raw lane score and recording every contributing lane), applies
-    the supersession penalty exactly once per merged candidate regardless
-    of which lane(s) surfaced it, then sorts and returns the top_k.
+    Historical questions use historical_state_lookup(), while current-state
+    questions use direct_state_lookup(). If either lookup succeeds, that
+    result is prepended to the fuzzy retrieval results with
+    combined_score=1.0.
+
+    The three fuzzy lanes — vector similarity, full-text, and recent-memory
+    retrieval — still run unconditionally and merge exactly as before.
+
+    Runs all three lanes, merges by episode_id (keeping the highest raw lane
+    score and recording every contributing lane), applies the supersession
+    penalty exactly once per merged candidate regardless of which lane(s)
+    surfaced it, then sorts and returns the top_k.
 
     For the vector lane, the pre-penalty score is recovered before merging
     (dividing back out config.OUTDATED_STATE_PENALTY when vector_search
     already applied it) so the penalty is never applied twice to the same
-    episode — vector_search's own standalone behavior is unchanged, this
-    recovery only affects what feeds the merge.
+    episode.
     """
     speaker = speaker or config.DEFAULT_SPEAKER
     query_embedding = llm_client.embed(question)
-    driver = graph_engine.get_driver()
-    with driver.session() as session:
-        direct_result = direct_state_lookup(session, speaker, question)
 
-        vector_results = vector_search(session, speaker, query_embedding, top_k=top_k)
-        fulltext_results = fulltext_lane(session, speaker, question, limit=top_k)
-        recent_results = recent_lane(session, speaker)
+    driver = graph_engine.get_driver()
+
+    with driver.session() as session:
+
+        # Choose between current-state and historical-state lookup.
+        if _is_historical_question(question):
+            direct_result = historical_state_lookup(
+                session,
+                speaker,
+                question,
+            )
+        else:
+            direct_result = direct_state_lookup(
+                session,
+                speaker,
+                question,
+            )
+
+        # Run all fuzzy retrieval lanes as before.
+        vector_results = vector_search(
+            session,
+            speaker,
+            query_embedding,
+            top_k=top_k,
+        )
+
+        fulltext_results = fulltext_lane(
+            session,
+            speaker,
+            question,
+            limit=top_k,
+        )
+
+        recent_results = recent_lane(
+            session,
+            speaker,
+        )
 
         merged = {}
 
+        # Merge vector results.
         for r in vector_results:
             raw_score = r["combined_score"]
+
+            # Recover the score before the supersession penalty so that
+            # the penalty is only applied once after all lanes are merged.
             if r["state_status"] == "superseded":
-                raw_score = raw_score / config.OUTDATED_STATE_PENALTY
-            _merge_candidate(merged, r["episode_id"], raw_score, "vector", {
-                "episode_id": r["episode_id"],
-                "raw_text": r["raw_text"],
-                "summary": r["summary"],
-                "importance": r["importance"],
-                "similarity": r["similarity"],
-                "recency": r["recency"],
-            })
+                raw_score = (
+                    raw_score / config.OUTDATED_STATE_PENALTY
+                )
 
+            _merge_candidate(
+                merged,
+                r["episode_id"],
+                raw_score,
+                "vector",
+                {
+                    "episode_id": r["episode_id"],
+                    "raw_text": r["raw_text"],
+                    "summary": r["summary"],
+                    "importance": r["importance"],
+                    "similarity": r["similarity"],
+                    "recency": r["recency"],
+                },
+            )
+
+        # Merge full-text results.
         for r in fulltext_results:
-            _merge_candidate(merged, r["episode_id"], r["score"], "fulltext", {
-                "episode_id": r["episode_id"],
-                "raw_text": r["raw_text"],
-                "summary": r["summary"],
-                "importance": r["importance"],
-                "similarity": None,
-                "recency": None,
-            })
+            _merge_candidate(
+                merged,
+                r["episode_id"],
+                r["score"],
+                "fulltext",
+                {
+                    "episode_id": r["episode_id"],
+                    "raw_text": r["raw_text"],
+                    "summary": r["summary"],
+                    "importance": r["importance"],
+                    "similarity": None,
+                    "recency": None,
+                },
+            )
 
+        # Merge recent-memory results.
         for r in recent_results:
-            _merge_candidate(merged, r["episode_id"], r["score"], "recent", {
-                "episode_id": r["episode_id"],
-                "raw_text": r["raw_text"],
-                "summary": r["summary"],
-                "importance": r["importance"],
-                "similarity": None,
-                "recency": None,
-            })
+            _merge_candidate(
+                merged,
+                r["episode_id"],
+                r["score"],
+                "recent",
+                {
+                    "episode_id": r["episode_id"],
+                    "raw_text": r["raw_text"],
+                    "summary": r["summary"],
+                    "importance": r["importance"],
+                    "similarity": None,
+                    "recency": None,
+                },
+            )
 
+        # Build final fuzzy retrieval results.
         final_results = []
+
         for episode_id, entry in merged.items():
-            state_status = _episode_state_status(session, speaker, episode_id)
+            state_status = _episode_state_status(
+                session,
+                speaker,
+                episode_id,
+            )
+
             combined_score = entry["raw_score"]
+
             if state_status == "superseded":
                 combined_score *= config.OUTDATED_STATE_PENALTY
+
             final_results.append({
                 "episode_id": episode_id,
                 "raw_text": entry["raw_text"],
@@ -373,19 +498,37 @@ def retrieve(question: str, speaker: str = None, top_k: int = 12) -> list[dict]:
                 "lanes": entry["lanes"],
             })
 
-        final_results.sort(key=lambda r: r["combined_score"], reverse=True)
+        # Rank fuzzy results.
+        final_results.sort(
+            key=lambda r: r["combined_score"],
+            reverse=True,
+        )
 
+        # Prepend the direct state result if one was found.
         if direct_result is not None:
+            is_historical = (
+                direct_result["source"]
+                == "historical_state_lookup"
+            )
+
             final_results.insert(0, {
                 "episode_id": None,
                 "raw_text": None,
-                "summary": f"{direct_result['entity']}: {direct_result['attribute']} = {direct_result['value']}",
+                "summary": (
+                    f"{direct_result['entity']}: "
+                    f"{direct_result['attribute']} = "
+                    f"{direct_result['value']}"
+                ),
                 "importance": None,
                 "similarity": None,
                 "recency": None,
                 "combined_score": 1.0,
-                "state_status": "current",
-                "lanes": ["direct_state_lookup"],
+                "state_status": (
+                    "superseded"
+                    if is_historical
+                    else "current"
+                ),
+                "lanes": [direct_result["source"]],
                 "attribute": direct_result["attribute"],
                 "value": direct_result["value"],
                 "entity": direct_result["entity"],
