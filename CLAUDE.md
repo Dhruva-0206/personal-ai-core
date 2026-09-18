@@ -279,14 +279,73 @@ retrieval-augmented reasoning about the user's evolving context.
   confirm/cancel flow (pending state shown, cancel takes no action,
   confirm actually executes) — all confirmed working before this commit.
 
+- Fixed historical-state retrieval, informed by a contributor's bug
+  report that flagged direct_state_lookup() as only ever checking
+  active=true states — so a question about a past value ("what was my
+  previous job") got no direct answer at all. The contributor's own
+  branch (fix/historical-retrieval, not merged, not built on) worked
+  around this with keyword-sniffing ("previous"/"before"/etc.) and a
+  parallel historical_state_lookup() function querying inactive states —
+  a design with its own bug: it required len(rows) != 1 to fail closed,
+  so it silently returned None whenever more than one historical state
+  existed for an attribute (e.g. a job changed twice), rather than
+  picking the most recent one.
+  Implemented fresh instead of building on that branch. Added
+  retrieval.classify_temporal_intent(question) -> "current"|"historical",
+  a single LLM classification call (llm_client.extract_json(), one
+  dedicated prompt) rather than keyword matching — the same reasoning as
+  the earlier attribute-matching redesign (see match_question_to_attribute()
+  history above): a fixed word list can't cover every phrasing a person
+  might use, full-sentence understanding can. Defaults to "current" on
+  any malformed or missing response, since misclassifying as "historical"
+  is the riskier direction — it would substitute a superseded value for
+  the current one. Called exactly once, only after
+  match_question_to_attribute() has already resolved an attribute — never
+  called speculatively before there's something to look up.
+  direct_state_lookup() itself (not a parallel function) now branches on
+  this classification: "current" is unchanged (active=true, same as
+  before); "historical" queries active=false states for the same
+  (speaker, attribute) pair, ORDER BY superseded_at DESC LIMIT 1 —
+  explicit LIMIT 1 makes this always deterministically return the single
+  most recently superseded value, fixing the contributor branch's
+  silent-failure case for >1 historical state.
+  Validated against live Nebius + Neo4j against the contributor's exact
+  test cases plus one they didn't cover: Sydney -> Melbourne ("where do I
+  live now" -> Melbourne; "where did I live before Melbourne" -> Sydney);
+  software engineer -> data scientist ("what is my current job" -> data
+  scientist; "what was my job before becoming a data scientist" ->
+  software engineer); and a 3-state case (software engineer -> data
+  scientist -> product manager) the contributor's len(rows) != 1 check
+  would have silently failed on — "what was my previous job" correctly
+  returned data scientist (the more recently superseded of the two prior
+  states), not software engineer and not None. Confirmed via direct state
+  history inspection that all three job states existed with distinct
+  superseded_at timestamps before trusting the query result.
+  Full credit to the contributor's bug report for correctly identifying
+  all three underlying issues (historical retrieval failing,
+  direct_state_lookup()'s active=true-only limitation, and the
+  marathon/Hyrox semantic-ranking issue below) even though this fix's
+  implementation — LLM classification inside direct_state_lookup() itself
+  — differs from their branch's keyword-matching parallel function.
+  Also observed during this validation: a second, different variant of
+  the tool-calling malformed-output failure mode first logged in the
+  previous entry — raw JSON prose written as plain content (e.g.
+  {"name": "query_memory", "arguments": {...}}) instead of a natural-
+  language answer, distinct from the previously-seen literal
+  "<tool_call>" text pattern. agent.py's existing retry detection only
+  matches the literal "<tool_call>" substring and did NOT catch this
+  variant, meaning it would have silently returned malformed output as a
+  final answer to the user. Not fixed yet. This suggests the detection
+  approach (matching specific known-bad substrings one at a time) may
+  need to become more general — e.g. detecting "content is non-empty AND
+  looks like structured data rather than a natural-language answer"
+  rather than enumerating literal known-bad strings one at a time. Needs
+  its own design pass, not a quick patch.
+
 ## Next up
 
-Start real daily use through the web interface (python web_app.py,
-http://127.0.0.1:5000/) to begin generating real usage data for the
-deferred calibration questions (importance-weighting on exploratory
-queries, attribute-similarity threshold, outdated-state penalty) — these
-can now be revisited with real data instead of synthetic test episodes.
-Remaining known issues: stray-entity misattribution when multiple
-entities appear in one episode; rare agent tool-calling failures now have
-a retry safety net but true frequency is still unknown pending real
-usage.
+(1) Marathon/Hyrox-style semantic ranking issue — real production
+instance of the importance-vs-relevance calibration issue logged since
+Phase 2. (2) Generalize agent.py's malformed-tool-call-output detection
+beyond literal substring matching, given a second distinct failure shape
+was just observed.

@@ -240,22 +240,81 @@ def match_question_to_attribute(session, speaker: str, question: str) -> str | N
     return None
 
 
+_TEMPORAL_CLASSIFY_PROMPT = """You are classifying whether a user's question is asking about the \
+CURRENT/present value of something, or a PAST/PREVIOUS value.
+
+Respond with ONLY valid JSON, no prose, no markdown code fences, in \
+exactly this shape: {"temporal": "current"} or {"temporal": "historical"}."""
+
+
+def classify_temporal_intent(question: str) -> str:
+    """
+    Classifies a question as asking about the "current" or "historical"
+    value of an attribute, via a single LLM call.
+
+    Only ever called after match_question_to_attribute() has already
+    resolved an attribute — never called speculatively when there's
+    nothing to look up.
+
+    Defaults to "current" whenever the response is missing, malformed, or
+    anything other than exactly one of the two expected strings — that's
+    the safer default, since misclassifying as "historical" would return
+    a superseded value in place of the real answer.
+    """
+    classification = llm_client.extract_json(_TEMPORAL_CLASSIFY_PROMPT, question)
+    temporal = classification.get("temporal")
+    if temporal in ("current", "historical"):
+        return temporal
+    return "current"
+
+
 def direct_state_lookup(session, speaker: str, question: str) -> dict | None:
     """
-    Checks known active states before falling back to fuzzy multi-lane
-    search. Scoped across ALL of this speaker's entities (not hardcoded to
-    "User") so it generalizes beyond the self-referential case — matches
+    Checks known states before falling back to fuzzy multi-lane search.
+    Scoped across ALL of this speaker's entities (not hardcoded to "User")
+    so it generalizes beyond the self-referential case — matches
     match_question_to_attribute()'s scope and doesn't bake in an assumption
     about which entity name self-reference normalization happens to use.
 
-    Returns None (not a guess) whenever the match is ambiguous: no
-    attribute match, no active state for that attribute, or more than one
-    active state for it (e.g. the same attribute active on two different
-    entities).
+    Once an attribute is resolved, branches on classify_temporal_intent():
+    "current" questions check active=true states (original behavior,
+    unchanged). "historical" questions check active=false states, taking
+    the single most recently superseded one via ORDER BY s.superseded_at
+    DESC LIMIT 1 — deterministic even when more than one historical state
+    exists for the attribute (e.g. a job changed twice).
+
+    Returns None (not a guess) whenever the match is ambiguous or absent:
+    no attribute match, no active state for that attribute when asking
+    about the current value (or more than one active state for it, e.g.
+    the same attribute active on two different entities), or no superseded
+    state at all when asking about a historical value.
     """
     attribute = match_question_to_attribute(session, speaker, question)
     if attribute is None:
         return None
+
+    temporal = classify_temporal_intent(question)
+
+    if temporal == "historical":
+        rows = list(session.run(
+            "MATCH (e:Entity {speaker: $speaker})-[:OF_ENTITY]-(s:State {attribute: $attribute}) "
+            "WHERE s.active = false "
+            "RETURN e.name AS entity, s.value AS value "
+            "ORDER BY s.superseded_at DESC LIMIT 1",
+            speaker=speaker, attribute=attribute,
+        ))
+        if not rows:
+            return None
+
+        row = rows[0]
+        return {
+            "source": "direct_lookup",
+            "attribute": attribute,
+            "value": row["value"],
+            "entity": row["entity"],
+            "confidence": "high",
+            "state_status": "superseded",
+        }
 
     rows = list(session.run(
         "MATCH (e:Entity {speaker: $speaker})-[:OF_ENTITY]-(s:State {attribute: $attribute}) "
@@ -273,6 +332,7 @@ def direct_state_lookup(session, speaker: str, question: str) -> dict | None:
         "value": row["value"],
         "entity": row["entity"],
         "confidence": "high",
+        "state_status": "current",
     }
 
 
@@ -293,11 +353,13 @@ def _merge_candidate(merged: dict, episode_id: str, raw_score: float, lane: str,
 def retrieve(question: str, speaker: str = None, top_k: int = 12) -> list[dict]:
     """
     Checks direct_state_lookup() first — if the question maps unambiguously
-    to one known active state, that's prepended to the front of the
-    results with combined_score=1.0 and lanes=["direct_state_lookup"]. The
-    three fuzzy lanes below still run and merge exactly as before either
-    way; direct lookup only ever adds a result, never replaces the fuzzy
-    pass.
+    to one known state (active for a current-value question, or the most
+    recently superseded one for a historical-value question), that's
+    prepended to the front of the results with combined_score=1.0,
+    lanes=["direct_state_lookup"], and state_status matching whichever
+    branch direct_state_lookup() took. The three fuzzy lanes below still
+    run and merge exactly as before either way; direct lookup only ever
+    adds a result, never replaces the fuzzy pass.
 
     Runs all three lanes unconditionally, merges by episode_id (keeping the
     highest raw lane score and recording every contributing lane), applies
@@ -384,7 +446,7 @@ def retrieve(question: str, speaker: str = None, top_k: int = 12) -> list[dict]:
                 "similarity": None,
                 "recency": None,
                 "combined_score": 1.0,
-                "state_status": "current",
+                "state_status": direct_result["state_status"],
                 "lanes": ["direct_state_lookup"],
                 "attribute": direct_result["attribute"],
                 "value": direct_result["value"],
