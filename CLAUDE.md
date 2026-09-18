@@ -470,9 +470,71 @@ retrieval-augmented reasoning about the user's evolving context.
   would reintroduce the exact latency cost (one more sequential LLM
   round-trip per request) that the previous step just worked to remove.
 
+- Parallelized the three independent retrieval lanes (vector_search,
+  fulltext_lane, recent_lane) in retrieve() via ThreadPoolExecutor —
+  pure concurrency change, no change to merge/scoring logic.
+  direct_state_lookup() and its embedding call stay sequential and run
+  first, unchanged, since a successful direct lookup already
+  short-circuits downstream logic elsewhere. Each concurrently-running
+  lane opens its own Neo4j session via a new
+  _run_lane_in_own_session() helper rather than sharing the session used
+  for direct_state_lookup()/the final merge loop — Session objects are
+  not thread-safe per the neo4j Python driver's own contract, only the
+  Driver is meant to be shared across threads.
+  Validated correctness first: re-ran all 4 historical-retrieval test
+  scenarios (Sydney/Melbourne current+historical, software engineer ->
+  data scientist -> product manager current+historical) and confirmed
+  every answer was unchanged at the retrieve() layer. Two agent-level
+  follow-up-call oddities surfaced during this run (a hallucinated
+  <tool_call> tag as final text, and separately an oddly hedged/vague
+  phrasing that didn't name the retrieved entity) — both confirmed via
+  direct cli.py search inspection to be pre-existing follow-up-call
+  flakiness with correct underlying retrieve() data underneath, unrelated
+  to this change. Logged as a new known gap below, not fixed here.
+  test_offline.py: 7/7, unaffected.
+  Measured timing in two layers, because the first (agent-level) layer
+  turned out too noisy to show the effect at all. Agent-level total time
+  showed no visible improvement (previous gap ~1.87-2.17s; new gap
+  ~1.75-2.62s — within noise, LLM-call jitter this session has shown
+  swings of 2-8x run to run). Rather than conclude "parallelization did
+  nothing," added a second, isolated measurement: monkey-patched
+  vector_search/fulltext_lane/recent_lane directly (no agent, no LLM
+  calls in the timed portion) to record each lane's own start/end wall-
+  clock timestamps. This confirmed concurrency is genuinely happening
+  (all three lanes start within ~1ms of each other in every run) and
+  revealed the real mechanism limiting the payoff: vector_search
+  dominates the other two lanes by 2-12x (0.85-0.89s vs. 0.07-0.4s for
+  fulltext_lane/recent_lane), because vector_search does a full
+  per-speaker Episode scan AND a separate _episode_state_status() Neo4j
+  round-trip for EVERY episode it scans — an N+1 query pattern internal
+  to that one lane. Since concurrent wall-time is bounded by the slowest
+  lane (not by the sum), the actual achievable saving is sum-of-lanes
+  minus the slowest lane, i.e. only whatever fulltext_lane + recent_lane
+  would have cost sequentially: measured at 0.14-0.79s per request across
+  3 runs. Real, but small relative to vector_search's own unparallelized
+  cost, and small enough to sit inside this session's own LLM-jitter
+  noise floor — which is exactly why the agent-level number didn't move.
+  vector_search's N+1 pattern (one scan query + one state-status query
+  per episode) is now a known, unaddressed latency issue in its own
+  right, logged for a future pass — separate from today's task, and
+  likely a bigger lever than lane parallelization was, now that we know
+  it's the dominant cost among the three lanes.
+  Also logged as a new gap (not fixed): the two follow-up-call quirks
+  observed during this validation happened at a call site
+  is_malformed_or_refused() doesn't cover — it's only ever checked
+  against the initial tool-selection call in handle_request(), never
+  against the final follow_up call's own content. A hallucinated
+  <tool_call> tag reaching the user as the literal final answer (as
+  happened once during this validation) would currently go completely
+  undetected and unretried.
+
 ## Next up
 
-(1) Parallelize the three retrieval lanes (vector/fulltext/recent) for
-further latency reduction. (2) Marathon/Hyrox fuzzy-ranking fix (try
-passing top-5 results to the existing answer call before building a
-dedicated reranking call).
+(1) Marathon/Hyrox fuzzy-ranking fix — try passing top-5 results to the
+existing answer call before building a dedicated reranking call. (2) Fix
+vector_search's N+1 pattern (one query for all episodes + one query per
+episode for state status) — likely a bigger latency win than lane
+parallelization was, now that we know it's the dominant cost. (3) Extend
+malformed/refused-output detection to also cover the agent's follow-up
+answer-generation call, not just the initial tool-selection call — a new
+gap surfaced during this validation.

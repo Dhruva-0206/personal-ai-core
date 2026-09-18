@@ -6,6 +6,7 @@ answer the question — just retrieval and ranking. Answering with an LLM
 comes later, once ranking itself is confirmed correct.
 """
 import math
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import config
@@ -424,6 +425,19 @@ def direct_state_lookup(session, speaker: str, question: str) -> dict | None:
     }
 
 
+def _run_lane_in_own_session(driver, lane_fn, *args, **kwargs):
+    """
+    Opens a fresh Neo4j session for lane_fn and runs it. Used to run the
+    three fuzzy lanes concurrently in retrieve(): the Driver is
+    thread-safe and meant to be shared, but a Session is explicitly NOT
+    thread-safe (per the neo4j Python driver's own contract) — so each
+    concurrently-running lane gets its own session instead of sharing the
+    one already open for direct_state_lookup()/the final merge loop.
+    """
+    with driver.session() as session:
+        return lane_fn(session, *args, **kwargs)
+
+
 # lanes means "which lane(s) returned this candidate", not "which lane(s)
 # found it relevant" — use the similarity/importance/recency fields
 # alongside it to judge actual relevance, not lanes membership alone.
@@ -454,6 +468,18 @@ def retrieve(question: str, speaker: str = None, top_k: int = 12) -> list[dict]:
     the supersession penalty exactly once per merged candidate regardless
     of which lane(s) surfaced it, then sorts and returns the top_k.
 
+    The three lanes are independent (none consumes another's output) and
+    each does its own Neo4j network I/O, so they run concurrently via
+    ThreadPoolExecutor — pure latency optimization, no change to what any
+    lane returns or how results are merged/scored. direct_state_lookup()
+    (and the query_embedding call before it) stays sequential and runs
+    first, since a successful direct lookup already short-circuits
+    downstream logic elsewhere in the caller; only the three fuzzy lanes
+    run concurrently with each other. Each concurrent lane opens its own
+    session via _run_lane_in_own_session() rather than sharing the
+    session used for direct_state_lookup()/the final merge loop, since
+    Neo4j Session objects are not thread-safe.
+
     For the vector lane, the pre-penalty score is recovered before merging
     (dividing back out config.OUTDATED_STATE_PENALTY when vector_search
     already applied it) so the penalty is never applied twice to the same
@@ -466,9 +492,20 @@ def retrieve(question: str, speaker: str = None, top_k: int = 12) -> list[dict]:
     with driver.session() as session:
         direct_result = direct_state_lookup(session, speaker, question)
 
-        vector_results = vector_search(session, speaker, query_embedding, top_k=top_k)
-        fulltext_results = fulltext_lane(session, speaker, question, limit=top_k)
-        recent_results = recent_lane(session, speaker)
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            vector_future = executor.submit(
+                _run_lane_in_own_session, driver, vector_search, speaker, query_embedding, top_k=top_k
+            )
+            fulltext_future = executor.submit(
+                _run_lane_in_own_session, driver, fulltext_lane, speaker, question, limit=top_k
+            )
+            recent_future = executor.submit(
+                _run_lane_in_own_session, driver, recent_lane, speaker
+            )
+
+            vector_results = vector_future.result()
+            fulltext_results = fulltext_future.result()
+            recent_results = recent_future.result()
 
         merged = {}
 
