@@ -50,7 +50,7 @@ for i in range(1, 11):
     # Reuse agent.py's own detection function rather than reimplementing
     # it, so this diagnostic can never silently drift out of sync with
     # what handle_request() actually checks for.
-    retry_triggered = agent._is_known_tool_calling_failure(finish_reason, content)
+    retry_triggered = finish_reason != "tool_calls" and agent.is_malformed_or_refused(content)
 
     if tool_calls:
         behavior = "real_tool_call"

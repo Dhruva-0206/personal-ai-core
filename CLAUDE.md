@@ -415,13 +415,64 @@ retrieval-augmented reasoning about the user's evolving context.
   now a confirmed recurring pattern across 3 independent occurrences, 3
   different shapes, not a one-off edge case. Not fixed yet.
 
+- Generalized agent.py's malformed/refused tool-call detection from
+  literal substring matching to structural signals, replacing
+  _is_known_tool_calling_failure() (which matched one exact "<tool_call>"
+  substring and one exact _REFUSAL_PHRASE string) with
+  is_malformed_or_refused(content) -> bool. Two checks, in order:
+  (1) _has_structural_malformation() — content containing both "{"/"}"
+  and one of "\"name\""/"\"function\""/"\"arguments\"" (catches
+  JSON-shaped tool-call prose generically), OR content starting with "<"
+  (catches tag-like leaks generically, not just the one tag name we'd
+  seen). This generalizes over both previously-seen structural variants
+  without hardcoding either exact string. (2) _has_refusal_heuristic_match()
+  — a small, explicitly-documented-as-incomplete fragment list ("don't
+  have access", "can't help with that", "unable to", "no way to
+  determine", "not able to"), case-insensitive. is_malformed_or_refused()
+  takes only content, not finish_reason — handle_request() is responsible
+  for the finish_reason != "tool_calls" gate, so a successful tool call or
+  a legitimate plain-text answer (e.g. "hello") is never flagged just for
+  being plain text. Kept the existing single-retry-then-accept behavior
+  and WARNING-level logging exactly as before; added a
+  _categorize_failure() helper so each WARNING now also logs which check
+  fired ("structural" vs. "refusal_heuristic"), for easier categorization
+  of future failures.
+  Validated in two stages. (1) New isolated unit test
+  (test_failure_detection.py, no real API calls), 5 cases, all behaved
+  exactly as expected: the two previously-seen structural variants (the
+  <tool_call> tag text, and raw JSON prose) both correctly detected; a
+  normal tool-call success and a normal plain-text "hello" answer both
+  correctly NOT flagged; and — the deliberately negative case — a
+  refusal reworded to avoid every fragment in the heuristic list
+  ("Sorry, but I don't think I'm the right tool for figuring that out.")
+  correctly went UNDETECTED, exactly as the documented limitation
+  predicts. This was a test built to honestly expose the ceiling, not to
+  pass by construction. (2) Live 10x reliability re-run of
+  agent.handle_request("where do I live"): 9/10 calls were real tool
+  calls (all correct, Melbourne). The 10th was a 4th real, independently-
+  worded refusal/failure ("I don't have information about your location
+  stored. Could you please provide your current location...") — false,
+  since the graph does have the location stored — and it also went
+  undetected, because it doesn't match any of the 5 fragments either.
+  This confirms the predicted ceiling with a live, real occurrence in the
+  same validation run, not just the constructed test case.
+  This detection is meaningfully broader than before (it catches failure
+  SHAPES, not just one exact string) but has a proven ceiling: refusal
+  wording is open-ended, and a fragment list will never catch every
+  phrasing. We are accepting this as good-enough insurance (paired with
+  the existing single-retry, which still helps even when detection
+  doesn't fire — the retry can and does succeed on the next attempt
+  regardless of whether the failure was recognized) rather than
+  continuing to chase individual refusal wordings — that would be a
+  losing game against LLM phrasing variety. A more complete fix (a
+  separate LLM call judging "did this response actually answer the
+  question") was considered and explicitly rejected for now, since it
+  would reintroduce the exact latency cost (one more sequential LLM
+  round-trip per request) that the previous step just worked to remove.
+
 ## Next up
 
-(1) Generalize agent.py's malformed/refused tool-call detection beyond
-literal substring matching — now confirmed as a recurring pattern across
-3 distinct variants, not a one-off edge case. (2) Parallelize the three
-retrieval lanes (vector/fulltext/recent) — the next latency lever,
-targeting the ~2-3s of non-LLM overhead observed in timing data. (3)
-Marathon/Hyrox fuzzy-ranking fix (try the free option first: pass top-5
-results to the existing answer call instead of just the top-1, before
-considering a dedicated reranking call).
+(1) Parallelize the three retrieval lanes (vector/fulltext/recent) for
+further latency reduction. (2) Marathon/Hyrox fuzzy-ranking fix (try
+passing top-5 results to the existing answer call before building a
+dedicated reranking call).

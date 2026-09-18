@@ -22,27 +22,73 @@ logger = logging.getLogger(__name__)
 # trying to re-parse the returned description string. None otherwise.
 pending_confirmation: dict | None = None
 
-# Narrow, literal match for one observed refusal phrasing (see
-# test_agent_reliability.py). This is likely to miss rephrased refusals —
-# that's an accepted limitation for now, not something to generalize with
-# fuzzy matching or another LLM call. It's a detection signal for logging
-# and a single retry, not an attempt to fix the model's underlying
-# behavior.
-_REFUSAL_PHRASE = "I can't help with that question using the available tools"
+# Small, deliberately non-exhaustive set of low-level phrase fragments
+# seen in genuine refusals so far. This is a heuristic net, not a
+# generalized refusal classifier — three independent real occurrences
+# have now used three different exact phrasings (see CLAUDE.md), so this
+# list WILL miss a sufficiently novel refusal. It exists to catch more
+# than one literal string, not to catch all of them.
+_REFUSAL_FRAGMENTS = (
+    "don't have access",
+    "can't help with that",
+    "unable to",
+    "no way to determine",
+    "not able to",
+)
 
 
-def _is_known_tool_calling_failure(finish_reason, content: str | None) -> bool:
+def _has_structural_malformation(content: str) -> bool:
     """
-    True for either of the two observed non-tool-calling failure modes:
-    a hallucinated fake tool-call written as plain text (contains a
-    literal "<tool_call>"), or an explicit refusal to use any tool
-    (matches _REFUSAL_PHRASE). Only ever meaningful when finish_reason is
-    already not "tool_calls" — a normal successful tool call always
-    short-circuits here and is completely unaffected.
+    True if the content looks like raw structured data leaked into what
+    should be natural language, rather than one specific known-bad
+    string. Catches the <tool_call> tag variant AND the raw-JSON-prose
+    variant we've now seen (both share the shape "looks like a function
+    call written as text") without hardcoding either exact string, plus
+    XML/tag-like leaks in general (not just this one tag name).
     """
-    if finish_reason == "tool_calls" or not content:
+    has_json_braces = "{" in content and "}" in content
+    has_call_shaped_key = (
+        '"name"' in content or '"function"' in content or '"arguments"' in content
+    )
+    looks_like_a_tag = content.lstrip().startswith("<")
+    return (has_json_braces and has_call_shaped_key) or looks_like_a_tag
+
+
+def _has_refusal_heuristic_match(content: str) -> bool:
+    """True if content contains any of the small refusal fragment list, case-insensitive."""
+    content_lower = content.lower()
+    return any(fragment in content_lower for fragment in _REFUSAL_FRAGMENTS)
+
+
+def _categorize_failure(content: str) -> str:
+    """Logging-only label for which check tripped is_malformed_or_refused()."""
+    if _has_structural_malformation(content):
+        return "structural"
+    if _has_refusal_heuristic_match(content):
+        return "refusal_heuristic"
+    return "unknown"
+
+
+def is_malformed_or_refused(content: str) -> bool:
+    """
+    True if content is structurally malformed (structured data leaked
+    into natural language) or matches the small refusal-heuristic
+    fragment list. Structural signals generalize beyond the exact strings
+    seen so far; the refusal check does not fully generalize — see
+    _REFUSAL_FRAGMENTS.
+
+    Takes only content, not finish_reason: this function has no opinion
+    on whether a tool call was expected. The caller (handle_request) is
+    responsible for only calling this when finish_reason != "tool_calls"
+    on a request that had tools available — never call this on a
+    successful tool-call response, and never call it to second-guess a
+    request that never offered any tool in the first place (a plain
+    conversational answer like "hello, how are you" must never be flagged
+    just because it's plain text with no tool call).
+    """
+    if not content:
         return False
-    return "<tool_call>" in content or _REFUSAL_PHRASE in content
+    return _has_structural_malformation(content) or _has_refusal_heuristic_match(content)
 
 
 def handle_request(user_message: str, speaker: str = None) -> str:
@@ -60,11 +106,17 @@ def handle_request(user_message: str, speaker: str = None) -> str:
     message = response.choices[0].message
     finish_reason = response.choices[0].finish_reason
 
-    if _is_known_tool_calling_failure(finish_reason, message.content):
+    # is_malformed_or_refused() takes only content — the finish_reason !=
+    # "tool_calls" gate below is what makes this safe to call: a
+    # successful tool call never reaches it, and a plain conversational
+    # answer (finish_reason == "stop" with no tool offered as relevant)
+    # only gets flagged if its content actually looks structurally
+    # malformed or refusal-shaped, not just because it's plain text.
+    if finish_reason != "tool_calls" and is_malformed_or_refused(message.content):
         logger.warning(
-            "Agent tool-calling failure detected (finish_reason=%r) — "
+            "Agent tool-calling failure detected (finish_reason=%r, check=%s) — "
             "retrying once. Raw content: %r",
-            finish_reason, message.content,
+            finish_reason, _categorize_failure(message.content), message.content,
         )
         # Same request, retried exactly once. Whatever comes back is used
         # as final — no second retry, and the retry's own result is not
@@ -76,12 +128,12 @@ def handle_request(user_message: str, speaker: str = None) -> str:
         )
         message = response.choices[0].message
         finish_reason = response.choices[0].finish_reason
-        if _is_known_tool_calling_failure(finish_reason, message.content):
+        if finish_reason != "tool_calls" and is_malformed_or_refused(message.content):
             logger.warning(
                 "Agent tool-calling failure persisted after retry "
-                "(finish_reason=%r) — proceeding anyway, not retrying "
+                "(finish_reason=%r, check=%s) — proceeding anyway, not retrying "
                 "again. Raw content: %r",
-                finish_reason, message.content,
+                finish_reason, _categorize_failure(message.content), message.content,
             )
 
     if finish_reason != "tool_calls":
