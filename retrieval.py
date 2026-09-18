@@ -183,12 +183,49 @@ name that is not in the provided list — only ever return one of the exact \
 strings given, or null."""
 
 
+def _match_attribute_fast(session, speaker: str, question_lower: str) -> str | None:
+    """
+    Layers 1-2 of attribute matching only: exact match, then substring
+    containment against known attribute names — cheap, deterministic, no
+    LLM call. Proven correct via the "job" case, which was resolved by
+    substring matching alone and never needed anything past this fast
+    path.
+
+    Factored out of match_question_to_attribute() so direct_state_lookup()
+    can check this fast path on its own terms and decide what to do next
+    (classify_temporal_intent() alone, or the combined classify_question()
+    call) without going through match_question_to_attribute()'s own
+    Layer 3, which would mean two separate LLM calls instead of one. Same
+    queries, same behavior as before — this is an extraction, not a
+    change to the layers themselves.
+    """
+    result = session.run(
+        "MATCH (:Entity {speaker: $speaker})-[:OF_ENTITY]-(s:State) "
+        "WHERE toLower(s.attribute) = $question_lower "
+        "RETURN DISTINCT s.attribute AS attribute LIMIT 1",
+        speaker=speaker, question_lower=question_lower,
+    ).single()
+    if result:
+        return result["attribute"]
+
+    if len(question_lower) >= config.ATTRIBUTE_SUBSTRING_MIN_LEN:
+        result = session.run(
+            "MATCH (:Entity {speaker: $speaker})-[:OF_ENTITY]-(s:State) "
+            "WHERE toLower(s.attribute) CONTAINS $question_lower OR $question_lower CONTAINS toLower(s.attribute) "
+            "RETURN DISTINCT s.attribute AS attribute ORDER BY size(s.attribute) DESC LIMIT 1",
+            speaker=speaker, question_lower=question_lower,
+        ).single()
+        if result:
+            return result["attribute"]
+
+    return None
+
+
 def match_question_to_attribute(session, speaker: str, question: str) -> str | None:
     """
-    Layers 1-2 are cheap and deterministic (exact match, then substring
-    containment against known attribute names) — proven correct via the
-    "job" case, which was resolved by substring matching alone and never
-    needed anything past this fast path.
+    Layers 1-2 are cheap and deterministic (_match_attribute_fast) —
+    proven correct via the "job" case, which was resolved by substring
+    matching alone and never needed anything past this fast path.
 
     Layer 3 is an LLM classification call against the speaker's known
     attribute vocabulary, only triggered when the fast path finds nothing.
@@ -201,26 +238,9 @@ def match_question_to_attribute(session, speaker: str, question: str) -> str | N
     """
     question_lower = question.strip().lower()
 
-    # Layer 1: exact match, case-insensitive
-    result = session.run(
-        "MATCH (:Entity {speaker: $speaker})-[:OF_ENTITY]-(s:State) "
-        "WHERE toLower(s.attribute) = $question_lower "
-        "RETURN DISTINCT s.attribute AS attribute LIMIT 1",
-        speaker=speaker, question_lower=question_lower,
-    ).single()
-    if result:
-        return result["attribute"]
-
-    # Layer 2: substring containment (longest existing attribute wins)
-    if len(question_lower) >= config.ATTRIBUTE_SUBSTRING_MIN_LEN:
-        result = session.run(
-            "MATCH (:Entity {speaker: $speaker})-[:OF_ENTITY]-(s:State) "
-            "WHERE toLower(s.attribute) CONTAINS $question_lower OR $question_lower CONTAINS toLower(s.attribute) "
-            "RETURN DISTINCT s.attribute AS attribute ORDER BY size(s.attribute) DESC LIMIT 1",
-            speaker=speaker, question_lower=question_lower,
-        ).single()
-        if result:
-            return result["attribute"]
+    attribute = _match_attribute_fast(session, speaker, question_lower)
+    if attribute is not None:
+        return attribute
 
     # Layer 3: LLM classification against the known attribute vocabulary
     rows = session.run(
@@ -268,6 +288,50 @@ def classify_temporal_intent(question: str) -> str:
     return "current"
 
 
+_COMBINED_CLASSIFY_PROMPT_TEMPLATE = """You are matching a user's question to one of their known tracked \
+attributes, and separately classifying whether it's asking about a CURRENT/present value or a PAST/PREVIOUS \
+value. Known attributes: {attributes}.
+
+Do both in a single response. Respond with ONLY valid JSON, no prose, no markdown code fences, in exactly \
+this shape: {{"attribute": "<one of the known attributes>", "temporal": "current"}} or \
+{{"attribute": null, "temporal": "historical"}} (attribute is null if none of the known attributes apply; \
+temporal is "current" or "historical" regardless of whether an attribute matched). Never invent an \
+attribute name that is not in the provided list — only ever return one of the exact strings given, or \
+null."""
+
+
+def classify_question(question: str, known_attributes: list[str]) -> dict:
+    """
+    Combines attribute matching's LLM layer and temporal-intent
+    classification into a single llm_client.extract_json() call, for the
+    case where the cheap attribute-matching layers already came back
+    empty and an LLM call is needed anyway — folds the temporal question
+    in for free instead of paying for a second sequential LLM round-trip
+    (classify_temporal_intent()) right after.
+
+    Validates each field independently, with the same safe-default rules
+    as the two calls this replaces: "attribute" is forced to None unless
+    it's exactly one of known_attributes (never trust an invented name);
+    "temporal" defaults to "current" unless it's exactly "current" or
+    "historical" (the safer default — misclassifying as "historical"
+    would substitute a superseded value for the current one). If the call
+    fails or parses badly, extract_json() returns {} and both fields fall
+    through to their defaults: {"attribute": None, "temporal": "current"}.
+    """
+    system_prompt = _COMBINED_CLASSIFY_PROMPT_TEMPLATE.format(attributes=known_attributes)
+    classification = llm_client.extract_json(system_prompt, question)
+
+    attribute = classification.get("attribute")
+    if attribute not in known_attributes:
+        attribute = None
+
+    temporal = classification.get("temporal")
+    if temporal not in ("current", "historical"):
+        temporal = "current"
+
+    return {"attribute": attribute, "temporal": temporal}
+
+
 def direct_state_lookup(session, speaker: str, question: str) -> dict | None:
     """
     Checks known states before falling back to fuzzy multi-lane search.
@@ -276,11 +340,20 @@ def direct_state_lookup(session, speaker: str, question: str) -> dict | None:
     match_question_to_attribute()'s scope and doesn't bake in an assumption
     about which entity name self-reference normalization happens to use.
 
-    Once an attribute is resolved, branches on classify_temporal_intent():
-    "current" questions check active=true states (original behavior,
-    unchanged). "historical" questions check active=false states, taking
-    the single most recently superseded one via ORDER BY s.superseded_at
-    DESC LIMIT 1 — deterministic even when more than one historical state
+    Classification is one LLM call in either direction, never two:
+    - If _match_attribute_fast() (the cheap exact/substring layers)
+      resolves an attribute, only classify_temporal_intent() runs —
+      identical to before.
+    - If the cheap layers find nothing, classify_question() runs once,
+      doing attribute matching's LLM layer and temporal classification
+      together, instead of match_question_to_attribute()'s old separate
+      Layer-3 call followed by a second classify_temporal_intent() call.
+
+    Once attribute and temporal are known (whichever path produced them),
+    branches exactly as before: "current" questions check active=true
+    states; "historical" questions check active=false states, taking the
+    single most recently superseded one via ORDER BY s.superseded_at DESC
+    LIMIT 1 — deterministic even when more than one historical state
     exists for the attribute (e.g. a job changed twice).
 
     Returns None (not a guess) whenever the match is ambiguous or absent:
@@ -289,11 +362,26 @@ def direct_state_lookup(session, speaker: str, question: str) -> dict | None:
     the same attribute active on two different entities), or no superseded
     state at all when asking about a historical value.
     """
-    attribute = match_question_to_attribute(session, speaker, question)
-    if attribute is None:
-        return None
+    question_lower = question.strip().lower()
+    attribute = _match_attribute_fast(session, speaker, question_lower)
 
-    temporal = classify_temporal_intent(question)
+    if attribute is not None:
+        temporal = classify_temporal_intent(question)
+    else:
+        rows = session.run(
+            "MATCH (:Entity {speaker: $speaker})-[:OF_ENTITY]-(s:State) "
+            "RETURN DISTINCT s.attribute AS attribute",
+            speaker=speaker,
+        )
+        known_attributes = [row["attribute"] for row in rows]
+        if not known_attributes:
+            return None
+
+        classification = classify_question(question, known_attributes)
+        attribute = classification["attribute"]
+        temporal = classification["temporal"]
+        if attribute is None:
+            return None
 
     if temporal == "historical":
         rows = list(session.run(

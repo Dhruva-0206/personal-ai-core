@@ -342,10 +342,86 @@ retrieval-augmented reasoning about the user's evolving context.
   rather than enumerating literal known-bad strings one at a time. Needs
   its own design pass, not a quick patch.
 
+- Diagnosed and fixed a latency problem in the agent path, prioritized
+  ahead of the marathon/Hyrox fuzzy-ranking issue on purpose: instrumented
+  a full agent.handle_request() call (timing added via monkey-patching in
+  an isolated scratch script, no permanent code changes) and found that
+  every fuzzy/historical query was making 5 sequential LLM calls end to
+  end — agent.py's initial tool-call decision, retrieval.embed(),
+  match_question_to_attribute()'s Layer-3 LLM classification,
+  classify_temporal_intent(), and agent.py's follow-up natural-language
+  answer. That's a breadth-of-impact problem (every such query pays for
+  it) versus the marathon/Hyrox ranking issue, which is a narrower edge
+  case — fixed this one first on that basis.
+  Root cause of the 5-call chain: attribute matching's LLM layer and
+  temporal-intent classification were two separate sequential round-trips
+  whenever the cheap exact/substring attribute layers didn't resolve
+  anything, even though both calls see the same question and could be
+  answered together. Added retrieval.classify_question(question,
+  known_attributes) -> {"attribute": ..., "temporal": ...}, a single
+  llm_client.extract_json() call combining both jobs, with the same
+  validation rules as the two calls it replaces (attribute forced to None
+  unless it's exactly one of known_attributes; temporal defaults to
+  "current" unless it's exactly "current" or "historical" — never trust
+  an invented attribute, never let a malformed response silently produce
+  the riskier "historical" default).
+  Restructured direct_state_lookup() rather than creating a parallel
+  function: extracted the cheap exact/substring layers out of
+  match_question_to_attribute() into _match_attribute_fast() (identical
+  queries, identical behavior — a pure extraction, not a logic change) so
+  direct_state_lookup() can check the fast path on its own terms. If the
+  fast path resolves an attribute, only classify_temporal_intent() runs
+  (one call, unchanged from before). If the fast path finds nothing,
+  classify_question() runs once instead of match_question_to_attribute()'s
+  old separate Layer-3 call followed by classify_temporal_intent() (two
+  calls) — cutting the sequential-call chain from 5 to 4 for every query
+  that needs the LLM attribute-matching path. Everything downstream
+  (active vs. historical state queries, LIMIT 1 on historical) is
+  byte-for-byte unchanged — only the classification call count changed.
+  Validated in two stages, per the project's own precedent of correctness
+  before speed: (1) re-ran all prior historical-retrieval test scenarios
+  (Sydney/Melbourne current+historical, software engineer -> data
+  scientist -> product manager current+historical) end to end against
+  live Nebius + Neo4j and confirmed every answer was byte-for-byte
+  identical to the pre-refactor validation, including the 3-state LIMIT 1
+  case (data scientist, not software engineer) — zero regressions before
+  trusting any timing number. (2) Re-measured timing with the same
+  monkey-patch instrumentation, re-running "where do I live" and "what
+  athletic event am I preparing for" (2 runs each, graph state restored
+  to match the original measurement's episodes for a fair comparison).
+  Previous (5-call) totals: 40.604s, 13.419s, 16.821s, 14.042s (average
+  ~21.2s; ~14.8s excluding the 40.6s outlier). New (4-call) totals:
+  13.684s, 9.875s, 9.325s, 8.508s (average ~10.35s) — a 30-51% reduction
+  in average end-to-end time, consistent with removing one full LLM
+  round-trip (individually ~0.8-2.5s in the prior measurement) from every
+  request.
+  Observed during this same timing work: call-to-call latency varies by
+  roughly 3-8x on identical call shapes with no logic difference (e.g. one
+  embed() call taking 4.2s, another taking 0.37s, on the same query
+  re-run seconds apart). Believed to be Nebius trial-tier infrastructure
+  variance (rate limiting / cold starts / shared capacity), not something
+  fixable in our code — worth re-checking once/if usage moves past trial
+  tier, since it would otherwise mask or exaggerate the effect of future
+  latency work.
+  Also observed during this validation: a THIRD distinct variant of the
+  tool-calling malformed/refused-output failure mode — an outright
+  refusal with novel wording ("I don't have access to your personal
+  information like your location...") — different from both previously
+  seen variants (the literal "<tool_call>" text hallucination, and raw
+  JSON prose written as plain content). None of the three occurrences
+  used identical wording. This confirms the existing literal-substring
+  detection in agent.py (_REFUSAL_PHRASE, matching one exact phrasing)
+  structurally cannot generalize to catch this class of failure — it's
+  now a confirmed recurring pattern across 3 independent occurrences, 3
+  different shapes, not a one-off edge case. Not fixed yet.
+
 ## Next up
 
-(1) Marathon/Hyrox-style semantic ranking issue — real production
-instance of the importance-vs-relevance calibration issue logged since
-Phase 2. (2) Generalize agent.py's malformed-tool-call-output detection
-beyond literal substring matching, given a second distinct failure shape
-was just observed.
+(1) Generalize agent.py's malformed/refused tool-call detection beyond
+literal substring matching — now confirmed as a recurring pattern across
+3 distinct variants, not a one-off edge case. (2) Parallelize the three
+retrieval lanes (vector/fulltext/recent) — the next latency lever,
+targeting the ~2-3s of non-LLM overhead observed in timing data. (3)
+Marathon/Hyrox fuzzy-ranking fix (try the free option first: pass top-5
+results to the existing answer call instead of just the top-1, before
+considering a dedicated reranking call).
