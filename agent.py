@@ -181,8 +181,32 @@ def handle_request(user_message: str, speaker: str = None) -> str:
         "content": json.dumps(result),
     }
 
+    follow_up_messages = messages + [tool_message, tool_result_message]
     follow_up = client.chat.completions.create(
         model=config.EXTRACTION_MODEL,
-        messages=messages + [tool_message, tool_result_message],
+        messages=follow_up_messages,
     )
-    return follow_up.choices[0].message.content
+    content = follow_up.choices[0].message.content
+
+    # Same detection and single-retry policy as the tool-selection call
+    # above, applied to the FOLLOW-UP call. WARNINGs say "follow-up call" so
+    # the two failure sites stay distinguishable in logs.
+    if is_malformed_or_refused(content):
+        logger.warning(
+            "Agent follow-up call failure detected (check=%s) — retrying "
+            "the follow-up call once. Raw content: %r",
+            _categorize_failure(content), content,
+        )
+        follow_up = client.chat.completions.create(
+            model=config.EXTRACTION_MODEL,
+            messages=follow_up_messages,
+        )
+        content = follow_up.choices[0].message.content
+        if is_malformed_or_refused(content):
+            logger.warning(
+                "Agent follow-up call failure persisted after retry "
+                "(check=%s) — proceeding anyway, not retrying again. "
+                "Raw content: %r",
+                _categorize_failure(content), content,
+            )
+    return content
