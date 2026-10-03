@@ -659,11 +659,51 @@ retrieval-augmented reasoning about the user's evolving context.
   future latency pass, lower priority than it was before this fix since
   the bigger cost is now resolved.
 
+- Extended agent.py's malformed/refused-output detection to the agent's
+  follow-up answer-generation call (the second call, made after a tool
+  result is available), previously unguarded — only the tool-selection
+  call was checked. After the follow-up call returns, the existing
+  is_malformed_or_refused() runs on its content (reused unchanged, not
+  forked). On a hit: a WARNING labeled "follow-up call" (with the same
+  structural/refusal_heuristic categorization) and one retry of the same
+  follow-up messages including the tool result; if the retry also fails
+  the check, its content is accepted as final and a second WARNING says
+  the failure persisted after retry — same single-retry-then-accept
+  policy as tool-selection, no loop. Tool-selection handling and its
+  "tool-calling" WARNING wording are unchanged, so the two failure sites
+  stay distinguishable in logs.
+  Validation, 14 isolated checks in test_followup_retry_isolated.py (fake
+  response objects, no real API/graph calls; all pass): Case 1,
+  malformed follow-up -> exactly one retry (4 checks: retry's clean
+  content returned, 3 raw calls, retry reuses identical messages incl.
+  tool result, one follow-up-labeled WARNING); Case 2, clean follow-up
+  untouched (3 checks: returned as-is, 2 raw calls, no WARNINGs); Case 3,
+  original and retry both malformed (4 checks: retry content accepted, 3
+  raw calls / no loop, two follow-up-labeled WARNINGs, second says
+  "persisted"); Case 4, tool-selection retry still works and its WARNING
+  is labeled tool-calling, not follow-up (3 checks). Existing suites
+  unaffected: test_agent_retry_isolated.py 8/8, test_failure_detection.py
+  5/5, test_offline.py 7/7. Live 10x agent.handle_request("where do I
+  live") run: 10/10 correct (Melbourne), 0 WARNINGs — no malformed output
+  occurred, so the new path was NOT exercised live; the isolated tests
+  are the actual correctness proof for this change, not the live run.
+  This closes the gap identified when the retrieval-lane parallelization
+  validation run surfaced a <tool_call> tag and muddled phrasing at the
+  follow-up call site, previously unguarded. Both known tool-calling
+  detection sites (tool-selection, follow-up answer) now share the same
+  mechanism and the same known ceiling (fragment-list refusal detection
+  won't catch every novel wording, accepted as good-enough insurance, not
+  a complete fix — consistent with the original tool-selection
+  detection's documented limitation). One side effect: the refusal
+  fragment heuristic can false-positive on a legitimate follow-up answer
+  containing a phrase like "unable to", costing one extra LLM call; the
+  retry's content is accepted either way, so no answer is lost.
+
 ## Next up
 
-(1) Extend malformed/refused-output detection to the agent's follow-up
-answer call. (2) retrieve()'s smaller N+1 pattern in the merge loop (same
-fix pattern as vector_search, lower priority). (3) Marathon/Hyrox:
-considered resolved in practice via the top-5 + match_type +
-attribute-resolution fixes already shipped; revisit only if real usage
-shows otherwise.
+(1) retrieve()'s smaller N+1 pattern in the merge loop (same batching fix
+as vector_search, lower priority, not yet done). (2) No other known open
+reliability or latency items at this time — next work should come from
+real usage via the web interface, per the standing plan to let actual
+daily use surface what to fix next rather than continuing to invent
+synthetic test scenarios.
