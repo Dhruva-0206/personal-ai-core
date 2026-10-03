@@ -618,11 +618,52 @@ retrieval-augmented reasoning about the user's evolving context.
   attributes — acceptable given the accuracy gain, but adds up across
   heavy logging use.
 
+- Fixed vector_search()'s N+1 query pattern. It previously ran one query
+  to scan all of a speaker's Episodes and then one
+  _episode_state_status() query per scanned episode (1+N Neo4j
+  round-trips; counted directly: 6 session.run calls for 5 episodes).
+  Added retrieval._all_episode_state_statuses(session, speaker), one
+  Cypher query returning total/active State counts for every Episode the
+  speaker has, built into a dict keyed by episode_id; vector_search()
+  looks each candidate up in that dict (default "no_state"), so it now
+  takes 2 round-trips regardless of episode count. The
+  current/superseded/no_state logic moved into a shared
+  _classify_state_status() used by both the per-episode and bulk lookups
+  so the two can't drift apart. _episode_state_status() itself is kept —
+  retrieve()'s merge loop still calls it. Scoring formula, merge logic and
+  vector_search()'s return shape are unchanged.
+  Measured (vector_search() called directly on a fixed query embedding,
+  5 episodes, warm-up call discarded, 7 timed runs each, no LLM calls in
+  the timed section): median 0.462s before (range 0.447-0.653s) vs 0.171s
+  after (range 0.165-0.240s) — a ~63% reduction in vector_search()'s own
+  time. Small sample (5 episodes) and Aura network latency varies run to
+  run, but both sets were tight; the saving grows with episode count
+  since the new cost stays at 2 queries. Full retrieve()/agent end-to-end
+  time was not re-measured.
+  Correctness verified: output captured before and after on a fixed
+  embedding — same episode IDs in the same order, identical state_status
+  values (current, current, superseded, superseded, superseded),
+  identical similarity scores, and combined_score matching to within
+  1.7e-8, the only difference traced to the time-based recency term
+  shifting between separate runs, not a logic change. All four
+  Sydney/Melbourne + job-history agent scenarios (current and historical)
+  gave the same answers as before, and a fuzzy "coffee" search showed
+  correct state_status values; test_offline.py 7/7.
+  A second, smaller instance of the same N+1 pattern exists in
+  retrieve()'s merge loop (calls _episode_state_status once per merged
+  candidate, bounded by the lanes' top_k limits rather than total episode
+  count — so smaller impact than vector_search's version, but the same
+  class of fix would apply: batch via _all_episode_state_statuses instead
+  of per-candidate calls). Not fixed in this pass, scoped out deliberately
+  to keep this diff clean and verifiable. Logged as a candidate for a
+  future latency pass, lower priority than it was before this fix since
+  the bigger cost is now resolved.
+
 ## Next up
 
-(1) vector_search's N+1 pattern (latency). (2) Extend
-malformed/refused-output detection to the follow-up answer call. (3)
-Marathon/Hyrox ranking: the top-5 + match_type fixes already in place are
-likely sufficient in practice now that attribute resolution also improved
-— no further dedicated reranking work planned unless real usage shows it's
-still a problem.
+(1) Extend malformed/refused-output detection to the agent's follow-up
+answer call. (2) retrieve()'s smaller N+1 pattern in the merge loop (same
+fix pattern as vector_search, lower priority). (3) Marathon/Hyrox:
+considered resolved in practice via the top-5 + match_type +
+attribute-resolution fixes already shipped; revisit only if real usage
+shows otherwise.
