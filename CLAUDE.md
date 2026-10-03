@@ -699,6 +699,70 @@ retrieval-augmented reasoning about the user's evolving context.
   containing a phrase like "unable to", costing one extra LLM call; the
   retry's content is accepted either way, so no answer is lost.
 
+- First real-usage findings (web interface / hand-typed episodes layered
+  on top of the synthetic regression chain), plus the follow-up diagnostics
+  they triggered. No code changes in this entry.
+  (1) City tracking held up on genuinely varied phrasing. The graph's
+  "city" history ran Sydney -> Melbourne -> Pune -> Mumbai with each value
+  correctly superseded in order and Mumbai the single active value. The
+  first two steps came from test_regression_live.py's synthetic chain; the
+  last two ("i live in pune", "i shifted to mumbai") were typed by the
+  user in their own phrasing — so the real-usage part of this is
+  Pune -> Mumbai on top of existing state, not four fully organic
+  changes. Still the first non-template data, and it behaved correctly.
+  (2) Live recurrence of the marathon/Hyrox pattern. "races I am training
+  for" (correctly plural/open-ended) received a confident single answer
+  (swimming or marathon, varying by run) despite BOTH being real,
+  independently-stored facts. Diagnosed:
+  - Storage/resolution: correct. "i am training for a marathon" became
+    goal = training for a marathon and "i am training for a swimming race"
+    became training = for a swimming race — two different, legitimately
+    distinct attributes, both active, neither wrongly superseding the
+    other (the LLM attribute-resolution layer judged them distinct).
+  - Retrieval: correct. Both episodes surfaced in the top 3 fuzzy results
+    at genuinely close scores (0.750 marathon, 0.721 swimming).
+  - Root cause, as isolated by a bypass experiment (retrieve() with
+    direct_state_lookup suppressed in a scratch script, same follow-up
+    call): the follow-up answer-generation call invents a "primary vs
+    secondary" hierarchy from ANY ranked list, even a ~0.03 score gap,
+    whether or not a direct_lookup entry is present. With the direct
+    entry (1.0) swimming came first; with it bypassed, the model made
+    marathon primary instead (the new top fuzzy score) — the behavior
+    persisted, only which fact won changed. This rules out the 1.0 score
+    anchor as the primary cause: it is a disposition in how the follow-up
+    call reasons over ranked results, not a scoring/retrieval problem.
+    Caveat: small samples (3 runs per condition, and only 2 of the 3
+    bypass runs actually produced an answer from results).
+  - The single-attribute assumption is structural, not incidental: both
+    match_question_to_attribute()'s and classify_question()'s prompts
+    explicitly ask for "which ONE attribute", direct_state_lookup() only
+    returns a single row by design, and for this question the cheap
+    substring layer resolved "training" before any LLM attribute judgment
+    ran at all (the other relevant attribute, "goal", never appears in
+    the question text).
+  (3) Smaller finding: in isolated testing the model occasionally rewrites
+  the user's question before passing it to query_memory (3/10 runs for
+  "races I am training for", e.g. "What races am I currently training
+  for?", and once "What races are you training for?" — flipping "I" to
+  "you"). Questions never pass through the self-reference normalization
+  extraction.py applies to STORED facts, so a rewritten question can
+  diverge from stored phrasing. Not confirmed to have broken an answer
+  yet; logged as a known gap for future attention, not an active bug.
+  (4) A transient tool-selection failure — 3 of 6 runs in one session
+  answered "races I am training for" with a clarifying question instead
+  of calling query_memory — did not reproduce in a follow-up test (0/20:
+  10/10 for the fragment and 10/10 for "what races am I training for",
+  every first call finish_reason=tool_calls). The earlier failures were
+  clustered in time and the difference is statistically suggestive
+  (roughly p ~0.01) that the first instance was real rather than a fluke,
+  but it is not reproducible on demand — consistent with the previously
+  documented Nebius trial-tier latency/reliability jitter, not a logic
+  bug. (An earlier message miscounted this as 4/6; the correct count is
+  3/6.) Neither malformed-output check flags a clarifying-question
+  non-answer, so it was invisible to the existing detection. No fix
+  attempted; flagged for passive monitoring during continued real usage
+  rather than further synthetic batch testing.
+
 ## Test files
 
 Reference only — all 8 files are committed. Run from the project root.
@@ -740,9 +804,14 @@ Neo4j credentials):
 
 ## Next up
 
-(1) retrieve()'s smaller N+1 pattern in the merge loop (same batching fix
-as vector_search, lower priority, not yet done). (2) No other known open
-reliability or latency items at this time — next work should come from
-real usage via the web interface, per the standing plan to let actual
-daily use surface what to fix next rather than continuing to invent
-synthetic test scenarios.
+(1) Marathon/Hyrox-class hierarchy-invention in the follow-up call: real
+root cause now understood (the model imposes ranking hierarchy on any
+scored list, not specifically the 1.0 anchor). Next concrete step: a more
+targeted follow-up-prompt guardrail instructing it to present multiple
+comparably-scored results as co-equal facts rather than ranking them, now
+informed by a correctly-isolated cause rather than the earlier
+under-informed attempt. (2) Question-text self-reference normalization
+gap (lower priority, unconfirmed to cause real harm yet). (3) Continue
+real usage via the web interface — this session's findings came entirely
+from genuine usage, confirming that's the right path forward, not
+synthetic testing.
