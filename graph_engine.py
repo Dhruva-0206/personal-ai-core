@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from neo4j import GraphDatabase
 
 import config
+import llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -127,14 +128,37 @@ def resolve_entity(session, speaker: str, name: str, embedding: list[float]) -> 
     return name
 
 
+_ATTRIBUTE_MATCH_PROMPT_TEMPLATE = """A person's record already tracks these attributes for them: {existing}. A new piece of information uses the attribute name {new_name!r} with value {value!r}. Does this describe the SAME underlying fact as one of the existing attributes (just named differently), or is it a genuinely NEW, distinct attribute? If it matches an existing one, respond with that EXACT existing name. If it's genuinely new, respond with null.
+
+Output ONLY valid JSON, no prose: {{"match": "<exact existing name>" or null}}"""
+
+
+def _llm_match_attribute(existing: list[str], new_name: str, value) -> str | None:
+    """
+    One LLM call: is new_name the same underlying fact as one of the
+    entity's existing active attribute names? Strictly validated — anything
+    that isn't exactly one of `existing` (an invented name, malformed or
+    empty response) is treated as None, i.e. "genuinely new".
+    """
+    prompt = _ATTRIBUTE_MATCH_PROMPT_TEMPLATE.format(
+        existing=existing, new_name=new_name, value=value,
+    )
+    response = llm_client.extract_json(prompt, f"{new_name}: {value}")
+    match = response.get("match") if isinstance(response, dict) else None
+    logger.info(
+        "Attribute LLM match: new=%r value=%r existing=%s -> raw=%r (%s)",
+        new_name, value, existing, match, "accepted" if match in existing else "rejected/new",
+    )
+    return match if match in existing else None
+
+
 def resolve_attribute(session, speaker: str, entity_name: str, attribute: str,
-                       embedding: list[float]) -> str:
+                       embedding: list[float], value=None) -> str:
     """
     Three-layer attribute-name resolution, mirroring resolve_entity but
     scoped to one entity's own state history rather than global: exact
-    match (case-insensitive), then substring containment, then embedding
-    cosine similarity above config.ATTRIBUTE_SIMILARITY_THRESHOLD, over the
-    distinct attribute names ever used on States attached to this entity.
+    match (case-insensitive), then substring containment, then an LLM
+    judgment (see Layer 3 below) over the entity's active attribute names.
     Returns the attribute unchanged if nothing matches — it's new.
     """
     attribute_lower = attribute.strip().lower()
@@ -160,25 +184,22 @@ def resolve_attribute(session, speaker: str, entity_name: str, attribute: str,
         if result:
             return result["attribute"]
 
-    # Layer 3: embedding cosine similarity above threshold
+    # Layer 3: LLM judgment against this entity's own active attribute names.
+    # Embedding similarity on bare attribute-name strings was tested against
+    # real drift (goal vs training, cosine 0.67) and found unreliable — see
+    # CLAUDE.md. Replaced with LLM judgment against the entity's own
+    # existing vocabulary, same approach already proven for
+    # question-to-attribute matching in retrieval.py.
     rows = session.run(
-        "MATCH (e:Entity {speaker: $speaker, name: $entity_name})-[:OF_ENTITY]-(s:State) "
-        "WHERE s.attribute_embedding IS NOT NULL "
-        "RETURN DISTINCT s.attribute AS attribute, s.attribute_embedding AS embedding",
+        "MATCH (e:Entity {speaker: $speaker, name: $entity_name})-[:OF_ENTITY]-(s:State {active: true}) "
+        "RETURN DISTINCT s.attribute AS attribute",
         speaker=speaker, entity_name=entity_name,
     )
-    best_attribute, best_score = None, 0.0
-    for row in rows:
-        score = _cosine(embedding, row["embedding"])
-        if 0.64 <= score <= 0.80:
-            logger.info(
-                "Borderline attribute match: '%s' vs '%s' = %s",
-                attribute, row["attribute"], score,
-            )
-        if score > best_score:
-            best_attribute, best_score = row["attribute"], score
-    if best_attribute and best_score >= config.ATTRIBUTE_SIMILARITY_THRESHOLD:
-        return best_attribute
+    existing = [row["attribute"] for row in rows]
+    if existing:
+        matched = _llm_match_attribute(existing, attribute, value)
+        if matched:
+            return matched
 
     # No match anywhere: it's a new attribute name for this entity
     return attribute
