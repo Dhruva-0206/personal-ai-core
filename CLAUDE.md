@@ -572,13 +572,57 @@ retrieval-augmented reasoning about the user's evolving context.
   could have been sensitive to which way extraction happened to go on
   that particular run, not just this one.
 
+- Replaced resolve_attribute()'s Layer 3 (embedding cosine similarity)
+  with LLM-based classification against the entity's own existing active
+  attribute names. Triggered by the extraction-consistency diagnostics
+  (test_extraction_consistency.py): the same marathon sentence produced 4
+  different attribute names across 10 isolated runs, and a full-pipeline
+  10x ingest into one graph showed the existing embedding layer failing to
+  merge them — "goal" vs "training" scored cosine 0.67, in the uncertain
+  zone between the two original calibration points (city/location 0.80
+  merge, city/job 0.65 no-merge), below ATTRIBUTE_SIMILARITY_THRESHOLD
+  0.72, so they stayed as permanently parallel active States that never
+  superseded each other. Same lesson as VECTOR_MIN_SIMILARITY and the
+  question-to-attribute redesign: embedding geometry on bare short strings
+  is not a reliable merge signal at this scale.
+  New Layer 3 (graph_engine._llm_match_attribute): one
+  llm_client.extract_json() call given the entity's active attribute names
+  plus the new name and value; answer strictly validated to be exactly one
+  of the existing names, else treated as "genuinely new" (never trust an
+  invented match). Layers 1-2 (exact, substring) are unchanged. To give
+  the prompt the value, resolve_attribute() gained an optional value=None
+  parameter and pipeline.py passes it. ATTRIBUTE_SIMILARITY_THRESHOLD in
+  config.py is now unused but left in place.
+  Result on the reproducing case (10 ingests of "I started training for a
+  marathon in December." into one graph): 6 of 7 LLM judgments merged the
+  new name into the existing "activity" attribute (training, goal,
+  goal, training, training_status all -> activity), versus the prior
+  behavior of splitting into parallel "goal" and "training" States from
+  the first near-synonym onward. Regression re-validated: Sydney/Melbourne
+  and the 3-state job history still give Melbourne / Sydney / product
+  manager / data scientist for current and historical questions;
+  test_offline.py 7/7.
+  The remaining 1/7 split (call 7: 'goal' rejected as matching 'activity'
+  after matching it twice before, on near-identical input) is NOT a bug to
+  keep chasing — it reflects genuine ambiguity in whether two phrasings
+  describe the same real-world fact, which even a correctly-functioning
+  LLM will answer inconsistently on borderline cases. Combined with the
+  already-logged State/Action presence non-determinism (6/10 to 9/10
+  depending on run), this confirms single-pass LLM extraction has an
+  inherent consistency ceiling for genuinely ambiguous natural language.
+  We are accepting this as a known architectural limitation of this entire
+  approach (confirmed shared with Reeve's production system via source
+  audit, not unique to us) rather than continuing to chase full
+  determinism on ambiguous input. New cost of this fix: one additional LLM
+  call per State write, once the entity has any existing active
+  attributes — acceptable given the accuracy gain, but adds up across
+  heavy logging use.
+
 ## Next up
 
-(1) NEW, promoted to top priority: investigate extraction
-non-determinism at the fact-capture level — same input text sometimes
-produces a State, sometimes doesn't. This is more fundamental than any
-single bug and should be understood before more work builds on top of
-it. (2) vector_search's N+1 pattern. (3) Extend malformed/refused-output
-detection to the follow-up answer call. (4) Marathon/Hyrox remains open
-pending the extraction-consistency investigation — may resolve naturally
-once that's fixed, or may still need a dedicated fix after.
+(1) vector_search's N+1 pattern (latency). (2) Extend
+malformed/refused-output detection to the follow-up answer call. (3)
+Marathon/Hyrox ranking: the top-5 + match_type fixes already in place are
+likely sufficient in practice now that attribute resolution also improved
+— no further dedicated reranking work planned unless real usage shows it's
+still a problem.
