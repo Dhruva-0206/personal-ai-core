@@ -528,13 +528,57 @@ retrieval-augmented reasoning about the user's evolving context.
   happened once during this validation) would currently go completely
   undetected and unretried.
 
+- Marathon/Hyrox ranking investigation (top-5 results, match_type
+  labeling, a reverted prompt guardrail, and a root-cause finding).
+  Diagnosed earlier: for "What athletic event am I preparing for?" the
+  agent confidently named only one of two genuinely true, relevant facts
+  (marathon training, Hyrox registration).
+  (a) Top-5 results — KEPT, works. query_memory (skills.py) now returns a
+  "results" list of up to QUERY_MEMORY_TOP_N=5 results (summary,
+  combined_score, similarity, importance, recency, state_status, lanes)
+  instead of only results[0], and agent.py's follow-up call receives the
+  list unchanged (it already serialized whatever run_skill() returned).
+  This prevents the confidently-names-only-one failure: in the first
+  validation run the answer mentioned both events. Side effect: a
+  direct_state_lookup hit no longer short-circuits to a single result;
+  up to 4 fuzzy results (including unrelated or superseded ones) ride
+  along behind it on every direct-lookup question. Re-validated "where do
+  I live now" (Melbourne) and "what is my current job" (product manager)
+  — both still correct.
+  (b) match_type labeling — KEPT. Each result now carries match_type:
+  "direct_lookup" for the direct_state_lookup entry, "fuzzy_relevance"
+  for everything else, alongside the unchanged combined_score. Honest
+  labeling of a real distinction (a direct-lookup 1.0 is certainty that a
+  fact is active, not comparable to a fuzzy relevance score), valuable
+  independent of whether it fixed this symptom — it did not.
+  (c) Prompt guardrail — TESTED, REVERTED, did not work. A system message
+  on the follow-up call told the model that scores across match_types
+  are not comparable and not to infer an importance hierarchy. Across 3
+  validation runs the model still named a single winner (Hyrox) every
+  time, once dismissing the marathon as not "currently preparing for",
+  once with a muddled explanation. Reverted per the same precedent as the
+  VECTOR_MIN_SIMILARITY floor: no speculative guardrail kept that did not
+  demonstrably change behavior.
+  (d) Real root cause: the same episode text, logged identically across
+  different test runs, produced DIFFERENT extracted states — once
+  'marathon' got a tracked State (goal = marathon, so direct_state_lookup
+  picked marathon), once it didn't (state_status "no_state"), with only
+  Hyrox getting one (event_registration). This is extraction
+  non-determinism at the fact-capture level, not a scoring or prompt
+  issue. It is the same class of problem as the already-logged
+  stray-entity-misattribution bug: the model is not reliably consistent
+  about WHAT becomes a tracked fact from the same input. This likely
+  undermines more than this one bug — any previously "passing" validation
+  could have been sensitive to which way extraction happened to go on
+  that particular run, not just this one.
+
 ## Next up
 
-(1) Marathon/Hyrox fuzzy-ranking fix — try passing top-5 results to the
-existing answer call before building a dedicated reranking call. (2) Fix
-vector_search's N+1 pattern (one query for all episodes + one query per
-episode for state status) — likely a bigger latency win than lane
-parallelization was, now that we know it's the dominant cost. (3) Extend
-malformed/refused-output detection to also cover the agent's follow-up
-answer-generation call, not just the initial tool-selection call — a new
-gap surfaced during this validation.
+(1) NEW, promoted to top priority: investigate extraction
+non-determinism at the fact-capture level — same input text sometimes
+produces a State, sometimes doesn't. This is more fundamental than any
+single bug and should be understood before more work builds on top of
+it. (2) vector_search's N+1 pattern. (3) Extend malformed/refused-output
+detection to the follow-up answer call. (4) Marathon/Hyrox remains open
+pending the extraction-consistency investigation — may resolve naturally
+once that's fixed, or may still need a dedicated fix after.

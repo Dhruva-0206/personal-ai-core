@@ -39,21 +39,24 @@ def register(skill: Skill):
     REGISTRY[skill.name] = skill
 
 
+QUERY_MEMORY_TOP_N = 5
+
+
 def _query_memory(question: str) -> dict:
-    """REAL skill: returns the top retrieval.retrieve() result for a question."""
+    """REAL skill: returns the top QUERY_MEMORY_TOP_N retrieval.retrieve() results for a question."""
     results = retrieval.retrieve(question)
     if not results:
-        return {"question": question, "summary": None, "message": "No results found."}
-    top = results[0]
+        return {"question": question, "results": [], "message": "No results found."}
+    fields = ("summary", "combined_score", "similarity", "importance", "recency", "state_status", "lanes")
     return {
         "question": question,
-        "summary": top["summary"],
-        "combined_score": top["combined_score"],
-        "similarity": top["similarity"],
-        "importance": top["importance"],
-        "recency": top["recency"],
-        "state_status": top["state_status"],
-        "lanes": top["lanes"],
+        "results": [
+            {
+                **{k: r[k] for k in fields},
+                "match_type": "direct_lookup" if "direct_state_lookup" in r["lanes"] else "fuzzy_relevance",
+            }
+            for r in results[:QUERY_MEMORY_TOP_N]
+        ],
     }
 
 
