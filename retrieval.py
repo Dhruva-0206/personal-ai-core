@@ -52,13 +52,36 @@ def _episode_state_status(session, speaker: str, episode_id: str) -> str:
         "sum(CASE WHEN s.active THEN 1 ELSE 0 END) AS active_states",
         speaker=speaker, episode_id=episode_id,
     ).single()
-    total_states = result["total_states"]
-    active_states = result["active_states"] or 0
+    return _classify_state_status(result["total_states"], result["active_states"])
+
+
+def _classify_state_status(total_states: int, active_states) -> str:
+    """Shared by the per-episode and bulk status lookups so both encode identical logic."""
+    active_states = active_states or 0
     if total_states == 0:
         return "no_state"
     if active_states > 0:
         return "current"
     return "superseded"
+
+
+def _all_episode_state_statuses(session, speaker: str) -> dict[str, str]:
+    """
+    Same status logic as _episode_state_status(), computed for every one of
+    this speaker's episodes in a single query, keyed by episode_id. Lets
+    vector_search() avoid one round-trip per scanned episode.
+    """
+    rows = session.run(
+        "MATCH (ep:Episode {speaker: $speaker}) "
+        "OPTIONAL MATCH (ep)-[:HAS_STATE]->(s:State) "
+        "RETURN ep.id AS episode_id, count(s) AS total_states, "
+        "sum(CASE WHEN s.active THEN 1 ELSE 0 END) AS active_states",
+        speaker=speaker,
+    )
+    return {
+        row["episode_id"]: _classify_state_status(row["total_states"], row["active_states"])
+        for row in rows
+    }
 
 
 def vector_search(session, speaker: str, query_embedding: list[float], top_k: int = 12) -> list[dict]:
@@ -73,19 +96,22 @@ def vector_search(session, speaker: str, query_embedding: list[float], top_k: in
     similarity. Episodes with zero states, or with at least one still-active
     state, are never penalized.
     """
-    rows = session.run(
+    rows = list(session.run(
         "MATCH (ep:Episode {speaker: $speaker}) WHERE ep.embedding IS NOT NULL "
         "RETURN ep.id AS episode_id, ep.raw_text AS raw_text, ep.summary AS summary, "
         "ep.importance AS importance, ep.embedding AS embedding, ep.timestamp AS created_at",
         speaker=speaker,
-    )
+    ))
+    # One bulk query for every episode's state status (2 queries total
+    # regardless of episode count), instead of one query per scanned episode.
+    status_by_episode = _all_episode_state_statuses(session, speaker)
     results = []
     for row in rows:
         similarity = _cosine(query_embedding, row["embedding"])
         recency = _recency_weight(row["created_at"], config.RECENCY_HALF_LIFE_DAYS)
         combined_score = _combined_score(similarity, row["importance"], recency)
 
-        state_status = _episode_state_status(session, speaker, row["episode_id"])
+        state_status = status_by_episode.get(row["episode_id"], "no_state")
         if state_status == "superseded":
             combined_score *= config.OUTDATED_STATE_PENALTY
 
