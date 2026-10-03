@@ -699,6 +699,45 @@ retrieval-augmented reasoning about the user's evolving context.
   containing a phrase like "unable to", costing one extra LLM call; the
   retry's content is accepted either way, so no answer is lost.
 
+## Test files
+
+Reference only — all 8 files are committed. Run from the project root.
+
+Self-checking suites (print PASS/FAIL per check, nonzero exit on failure):
+- test_offline.py — `python test_offline.py`. Pure unit tests (cosine,
+  code-fence stripping, extraction fallback). No credentials, no network.
+  Expected: 7/7.
+- test_failure_detection.py — `python test_failure_detection.py`. Tests
+  agent.is_malformed_or_refused() on constructed strings. No credentials,
+  no network. Expected: 5/5, including one deliberately undetected case
+  that documents the heuristic's ceiling.
+- test_agent_retry_isolated.py — `python test_agent_retry_isolated.py`.
+  Tool-selection retry logic with fake response objects and the stub
+  skills. No credentials, no network. Expected: 8/8.
+- test_followup_retry_isolated.py — `python test_followup_retry_isolated.py`.
+  Follow-up-call retry logic, same fake-client approach. No credentials,
+  no network. Expected: 14/14.
+- test_regression_live.py — `python test_regression_live.py`. LIVE: needs
+  Nebius Token Factory and Neo4j Aura credentials in .env and an Aura
+  instance that is not auto-paused. RESETS the "default" speaker, logs the
+  Sydney/Melbourne + 3-state job chain, then asserts current and
+  historical answers via the agent and the high-stakes confirmation gate.
+  Exit code verified directly: 1 on a deliberate failure, 0 on a clean run
+  (2 if setup fails). Single failures can be LLM flakiness — re-run first.
+
+Live diagnostics (print-only, NO pass/fail — useful for investigation,
+not for regression detection; all need live Nebius and, where noted,
+Neo4j credentials):
+- test_tool_calling.py — Nebius only. Isolated native tool-calling probe.
+- test_agent_reliability.py — Nebius + Neo4j. 10x agent.handle_request(
+  "where do I live"), reports tool-call vs. refusal vs. hallucination.
+- test_extraction_consistency.py — Nebius only (no graph writes). 10x
+  extraction.extract() on the marathon and Hyrox sentences.
+- test_web_app.py — Nebius + Neo4j. Drives web_app.py in-process via
+  Flask's test_client (log, ask, confirm/cancel flow). Candidate for
+  future conversion to real assertions, not done yet — currently the only
+  coverage of the web interface and it needs manual inspection.
+
 ## Next up
 
 (1) retrieve()'s smaller N+1 pattern in the merge loop (same batching fix
