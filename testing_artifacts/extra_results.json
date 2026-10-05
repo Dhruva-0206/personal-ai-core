@@ -1,0 +1,135 @@
+[
+  {
+    "id": "T084",
+    "title": "Malformed JSON fallback",
+    "category": "Injected reliability",
+    "setup": "Two model responses: not JSON",
+    "expected": "2 attempts then schema-valid fallback",
+    "actual": {
+      "parsed": {
+        "summary": "I live in Sydney.",
+        "importance": 0.5,
+        "event_time": null,
+        "entities": [],
+        "states": [],
+        "actions": [],
+        "relations": []
+      },
+      "attempts": 2
+    },
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T085",
+    "title": "Extraction service outage fallback",
+    "category": "Injected reliability",
+    "setup": "Two injected service exceptions",
+    "expected": "2 attempts then schema-valid fallback",
+    "actual": {
+      "parsed": {
+        "summary": "I live in Sydney.",
+        "importance": 0.5,
+        "event_time": null,
+        "entities": [],
+        "states": [],
+        "actions": [],
+        "relations": []
+      },
+      "attempts": 2
+    },
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T086",
+    "title": "Importance range validation",
+    "category": "Injected reliability",
+    "setup": "Model returns importance=2.7",
+    "expected": "importance in [0,1] or controlled rejection",
+    "actual": {
+      "importance": 2.7,
+      "summary": "hello",
+      "event_time": null,
+      "entities": [],
+      "states": [],
+      "actions": [],
+      "relations": []
+    },
+    "result": "FAIL",
+    "failure_category": "extraction",
+    "severity": "HIGH"
+  },
+  {
+    "id": "T087",
+    "title": "Summary type validation",
+    "category": "Injected reliability",
+    "setup": "Model returns object-valued summary",
+    "expected": "summary is string or controlled rejection",
+    "actual": {
+      "summary": {
+        "invalid": "object"
+      },
+      "importance": 0.5,
+      "event_time": null,
+      "entities": [],
+      "states": [],
+      "actions": [],
+      "relations": []
+    },
+    "result": "FAIL",
+    "failure_category": "extraction",
+    "severity": "HIGH"
+  },
+  {
+    "id": "T088",
+    "title": "Empty tool-call list",
+    "category": "Injected reliability",
+    "setup": "finish_reason=tool_calls; tool_calls=[]",
+    "expected": "Controlled nonempty error response",
+    "actual": "IndexError: list index out of range",
+    "result": "FAIL",
+    "failure_category": "model instability",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T089",
+    "title": "Tool args wrong JSON type",
+    "category": "Injected reliability",
+    "setup": "set_reminder arguments=[]",
+    "expected": "Controlled validation response",
+    "actual": "TypeError: skills.run_skill() argument after ** must be a mapping, not list",
+    "result": "FAIL",
+    "failure_category": "tool/skill safety",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T090",
+    "title": "High stakes invalid argument validation",
+    "category": "Injected reliability",
+    "setup": "make_purchase with missing item/price",
+    "expected": "Reject malformed action before offering confirmation",
+    "actual": {
+      "status": "needs_confirmation",
+      "skill": "make_purchase",
+      "args": {},
+      "description": "Make a purchase: "
+    },
+    "result": "FAIL",
+    "failure_category": "tool/skill safety",
+    "severity": "MEDIUM"
+  },
+  {
+    "id": "T091",
+    "title": "Retry outage",
+    "category": "Injected reliability",
+    "setup": "Refusal followed by service exception",
+    "expected": "Controlled error response",
+    "actual": "RuntimeError: Injected retry outage",
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL"
+  }
+]

@@ -1,0 +1,443 @@
+[
+  {
+    "id": "T036",
+    "title": "Malformed extraction shape",
+    "category": "Reliability",
+    "setup": "[]",
+    "expected": "Safe schema-valid fallback or explicit validation result",
+    "actual": {
+      "summary": "I live in Sydney.",
+      "importance": 0.5,
+      "event_time": null,
+      "entities": [],
+      "states": [],
+      "actions": [],
+      "relations": []
+    },
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T037",
+    "title": "Malformed extraction shape",
+    "category": "Reliability",
+    "setup": "'not an object'",
+    "expected": "Safe schema-valid fallback or explicit validation result",
+    "actual": "AttributeError: 'str' object has no attribute 'setdefault'",
+    "result": "FAIL",
+    "failure_category": "extraction",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T038",
+    "title": "Malformed extraction shape",
+    "category": "Reliability",
+    "setup": "{'entities': None}",
+    "expected": "Safe schema-valid fallback or explicit validation result",
+    "actual": "TypeError: 'NoneType' object is not iterable",
+    "result": "FAIL",
+    "failure_category": "extraction",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T039",
+    "title": "Malformed extraction shape",
+    "category": "Reliability",
+    "setup": "{'entities': [{}]}",
+    "expected": "Safe schema-valid fallback or explicit validation result",
+    "actual": {
+      "entities": [
+        {
+          "name": null
+        }
+      ],
+      "summary": "I live in Sydney.",
+      "importance": 0.5,
+      "event_time": null,
+      "states": [],
+      "actions": [],
+      "relations": []
+    },
+    "result": "FAIL",
+    "failure_category": "extraction",
+    "severity": "HIGH"
+  },
+  {
+    "id": "T040",
+    "title": "Malformed extraction shape",
+    "category": "Reliability",
+    "setup": "{'states': [{'entity': 'User'}]}",
+    "expected": "Safe schema-valid fallback or explicit validation result",
+    "actual": {
+      "states": [
+        {
+          "entity": "User"
+        }
+      ],
+      "summary": "I live in Sydney.",
+      "importance": 0.5,
+      "event_time": null,
+      "entities": [],
+      "actions": [],
+      "relations": []
+    },
+    "result": "FAIL",
+    "failure_category": "extraction",
+    "severity": "HIGH"
+  },
+  {
+    "id": "T041",
+    "title": "Malformed tool JSON",
+    "category": "Reliability",
+    "setup": "Tool set_reminder arguments=\"{\"",
+    "expected": "Controlled error without uncaught exception",
+    "actual": "JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)",
+    "result": "FAIL",
+    "failure_category": "tool/skill safety",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T042",
+    "title": "Unknown tool",
+    "category": "Reliability",
+    "setup": "Tool name delete_everything",
+    "expected": "Controlled rejection without uncaught exception",
+    "actual": "ValueError: Unknown skill: 'delete_everything'. Registered skills: ['make_purchase', 'query_memory', 'set_reminder']",
+    "result": "FAIL",
+    "failure_category": "tool/skill safety",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T043",
+    "title": "Missing tool argument",
+    "category": "Reliability",
+    "setup": "set_reminder {\"text\":\"hello\"}",
+    "expected": "Controlled validation error without crash",
+    "actual": "TypeError: _set_reminder() missing 1 required positional argument: 'time'",
+    "result": "FAIL",
+    "failure_category": "tool/skill safety",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T044",
+    "title": "Empty model choices",
+    "category": "Reliability",
+    "setup": "choices=[]",
+    "expected": "Controlled model error without crash",
+    "actual": "IndexError: list index out of range",
+    "result": "FAIL",
+    "failure_category": "model instability",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T045",
+    "title": "Empty agent answer",
+    "category": "Reliability",
+    "setup": "stop; content=None",
+    "expected": "Nonempty user-facing response",
+    "actual": null,
+    "result": "FAIL",
+    "failure_category": "model instability",
+    "severity": "MEDIUM"
+  },
+  {
+    "id": "T046",
+    "title": "Nebius unavailable",
+    "category": "Reliability",
+    "setup": "chat raises RuntimeError(\"Injected Nebius unavailable\")",
+    "expected": "Controlled error without crash",
+    "actual": "RuntimeError: Injected Nebius unavailable",
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T047",
+    "title": "Multiple model tool calls",
+    "category": "Reliability",
+    "setup": "Two distinct reminder calls",
+    "expected": "Both calls handled or explicit unsupported notice",
+    "actual": {
+      "answer": "Done",
+      "executed": 1
+    },
+    "result": "FAIL",
+    "failure_category": "agent reasoning",
+    "severity": "HIGH"
+  },
+  {
+    "id": "T048",
+    "title": "Failed tool",
+    "category": "Reliability",
+    "setup": "query_memory raises RuntimeError",
+    "expected": "Controlled error without crash",
+    "actual": "RuntimeError: Injected tool failure",
+    "result": "FAIL",
+    "failure_category": "tool/skill safety",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T049",
+    "title": "High stakes gate",
+    "category": "Skills/safety",
+    "setup": "run_skill(make_purchase, item=test, price=$1)",
+    "expected": "needs_confirmation without executing",
+    "actual": {
+      "status": "needs_confirmation",
+      "skill": "make_purchase",
+      "args": {
+        "item": "test",
+        "price": "$1"
+      },
+      "description": "Make a purchase: item='test', price='$1'"
+    },
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T050",
+    "title": "Agent initiated high stakes",
+    "category": "Skills/safety",
+    "setup": "Model calls make_purchase",
+    "expected": "Pending confirmation; zero executions",
+    "actual": {
+      "answer": "Make a purchase: item='test', price='$1'",
+      "executions": 0,
+      "pending": {
+        "name": "make_purchase",
+        "args": {
+          "item": "test",
+          "price": "$1"
+        },
+        "description": "Make a purchase: item='test', price='$1'"
+      }
+    },
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T051",
+    "title": "UI cancellation",
+    "category": "UI",
+    "setup": "POST /confirm action=no with pending purchase",
+    "expected": "200 Cancelled; pending cleared",
+    "actual": {
+      "http": 200,
+      "body": "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Personal AI Memory</title>\n<style>\n  body {\n    font-family: -apple-system, Segoe UI, Arial, sans-serif;\n    max-width: 700px;\n    margin: 40px auto;\n    padding: 0 16px;\n    color: #222;\n    background: #fafafa;\n  }\n  h1 { font-size: 22px; }\n  h2 { font-size: 16px; margin-bottom: 8px; }\n  section { margin-bottom: 28px; }\n  textarea, input[type=text] {\n    width: 100%;\n    box-sizing: border-box;\n    padding: 8px;\n    font-size: 14px;\n    font-family: inherit;\n    border: 1px solid #ccc;\n    border-radius: 4px;\n  }\n  button {\n    padding: 8px 16px;\n    margin-top: 8px;\n    cursor: pointer;\n    border: 1px solid #888;\n    border-radius: 4px;\n    background: #fff;\n  }\n  button:hover { background: #eee; }\n  .message {\n    background: #eef3ff;\n    border: 1px solid #9ab4e6;\n    padding: 12px;\n    margin-bottom: 20px;\n    border-radius: 4px;\n    white-space: pre-wrap;\n  }\n  .message.error {\n    background: #fdecec;\n    border-color: #d99;\n  }\n  .confirm-box {\n    background: #fff8dc;\n    border: 1px solid #d9c56a;\n    padding: 12px;\n    margin-bottom: 20px;\n    border-radius: 4px;\n  }\n  .confirm-box form { display: inline-block; margin-right: 8px; }\n  .memory {\n    border-bottom: 1px solid #ddd;\n    padding: 8px 0;\n  }\n  .memory .importance {\n    color: #888;\n    font-size: 12px;\n  }\n</style>\n</head>\n<body>\n\n<h1>Personal AI Memory</h1>\n\n\n<div class=\"message\">Cancelled.</div>\n\n\n\n\n<section>\n  <h2>Log something</h2>\n  <form method=\"post\" action=\"/log\">\n    <textarea name=\"text\" rows=\"3\" placeholder=\"What's on your mind?\"></textarea>\n    <button type=\"submit\">Log</button>\n  </form>\n</section>\n\n<section>\n  <h2>Ask</h2>\n  <form method=\"post\" action=\"/ask\">\n    <input type=\"text\" name=\"question\" placeholder=\"Ask a question...\">\n    <button type=\"submit\">Ask</button>\n  </form>\n</section>\n\n<section>\n  <h2>Recent memories</h2>\n  \n    <p>No memories yet.</p>\n  \n</section>\n\n</body>\n</html>",
+      "pending": null
+    },
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T052",
+    "title": "UI confirmation",
+    "category": "UI",
+    "setup": "POST /confirm action=yes with pending stub purchase",
+    "expected": "200 Confirmed; pending cleared",
+    "actual": {
+      "http": 200,
+      "body": "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Personal AI Memory</title>\n<style>\n  body {\n    font-family: -apple-system, Segoe UI, Arial, sans-serif;\n    max-width: 700px;\n    margin: 40px auto;\n    padding: 0 16px;\n    color: #222;\n    background: #fafafa;\n  }\n  h1 { font-size: 22px; }\n  h2 { font-size: 16px; margin-bottom: 8px; }\n  section { margin-bottom: 28px; }\n  textarea, input[type=text] {\n    width: 100%;\n    box-sizing: border-box;\n    padding: 8px;\n    font-size: 14px;\n    font-family: inherit;\n    border: 1px solid #ccc;\n    border-radius: 4px;\n  }\n  button {\n    padding: 8px 16px;\n    margin-top: 8px;\n    cursor: pointer;\n    border: 1px solid #888;\n    border-radius: 4px;\n    background: #fff;\n  }\n  button:hover { background: #eee; }\n  .message {\n    background: #eef3ff;\n    border: 1px solid #9ab4e6;\n    padding: 12px;\n    margin-bottom: 20px;\n    border-radius: 4px;\n    white-space: pre-wrap;\n  }\n  .message.error {\n    background: #fdecec;\n    border-color: #d99;\n  }\n  .confirm-box {\n    background: #fff8dc;\n    border: 1px solid #d9c56a;\n    padding: 12px;\n    margin-bottom: 20px;\n    border-radius: 4px;\n  }\n  .confirm-box form { display: inline-block; margin-right: 8px; }\n  .memory {\n    border-bottom: 1px solid #ddd;\n    padding: 8px 0;\n  }\n  .memory .importance {\n    color: #888;\n    font-size: 12px;\n  }\n</style>\n</head>\n<body>\n\n<h1>Personal AI Memory</h1>\n\n\n<div class=\"message\">Confirmed: {&#39;status&#39;: &#39;confirmed&#39;, &#39;skill&#39;: &#39;make_purchase&#39;, &#39;item&#39;: &#39;test&#39;, &#39;price&#39;: &#39;$1&#39;}</div>\n\n\n\n\n<section>\n  <h2>Log something</h2>\n  <form method=\"post\" action=\"/log\">\n    <textarea name=\"text\" rows=\"3\" placeholder=\"What's on your mind?\"></textarea>\n    <button type=\"submit\">Log</button>\n  </form>\n</section>\n\n<section>\n  <h2>Ask</h2>\n  <form method=\"post\" action=\"/ask\">\n    <input type=\"text\" name=\"question\" placeholder=\"Ask a question...\">\n    <button type=\"submit\">Ask</button>\n  </form>\n</section>\n\n<section>\n  <h2>Recent memories</h2>\n  \n    <p>No memories yet.</p>\n  \n</section>\n\n</body>\n</html>",
+      "pending": null
+    },
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T053",
+    "title": "No pending confirmation",
+    "category": "UI",
+    "setup": "POST /confirm action=yes; no pending",
+    "expected": "200 Nothing pending",
+    "actual": {
+      "http": 200,
+      "body": "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Personal AI Memory</title>\n<style>\n  body {\n    font-family: -apple-system, Segoe UI, Arial, sans-serif;\n    max-width: 700px;\n    margin: 40px auto;\n    padding: 0 16px;\n    color: #222;\n    background: #fafafa;\n  }\n  h1 { font-size: 22px; }\n  h2 { font-size: 16px; margin-bottom: 8px; }\n  section { margin-bottom: 28px; }\n  textarea, input[type=text] {\n    width: 100%;\n    box-sizing: border-box;\n    padding: 8px;\n    font-size: 14px;\n    font-family: inherit;\n    border: 1px solid #ccc;\n    border-radius: 4px;\n  }\n  button {\n    padding: 8px 16px;\n    margin-top: 8px;\n    cursor: pointer;\n    border: 1px solid #888;\n    border-radius: 4px;\n    background: #fff;\n  }\n  button:hover { background: #eee; }\n  .message {\n    background: #eef3ff;\n    border: 1px solid #9ab4e6;\n    padding: 12px;\n    margin-bottom: 20px;\n    border-radius: 4px;\n    white-space: pre-wrap;\n  }\n  .message.error {\n    background: #fdecec;\n    border-color: #d99;\n  }\n  .confirm-box {\n    background: #fff8dc;\n    border: 1px solid #d9c56a;\n    padding: 12px;\n    margin-bottom: 20px;\n    border-radius: 4px;\n  }\n  .confirm-box form { display: inline-block; margin-right: 8px; }\n  .memory {\n    border-bottom: 1px solid #ddd;\n    padding: 8px 0;\n  }\n  .memory .importance {\n    color: #888;\n    font-size: 12px;\n  }\n</style>\n</head>\n<body>\n\n<h1>Personal AI Memory</h1>\n\n\n<div class=\"message error\">Nothing pending to confirm.</div>\n\n\n\n\n<section>\n  <h2>Log something</h2>\n  <form method=\"post\" action=\"/log\">\n    <textarea name=\"text\" rows=\"3\" placeholder=\"What's on your mind?\"></textarea>\n    <button type=\"submit\">Log</button>\n  </form>\n</section>\n\n<section>\n  <h2>Ask</h2>\n  <form method=\"post\" action=\"/ask\">\n    <input type=\"text\" name=\"question\" placeholder=\"Ask a question...\">\n    <button type=\"submit\">Ask</button>\n  </form>\n</section>\n\n<section>\n  <h2>Recent memories</h2>\n  \n    <p>No memories yet.</p>\n  \n</section>\n\n</body>\n</html>",
+      "pending": null
+    },
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T054",
+    "title": "Whitespace form",
+    "category": "UI",
+    "setup": "POST /log text=\"  \"",
+    "expected": "200 with visible error",
+    "actual": {
+      "http": 200,
+      "body": "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Personal AI Memory</title>\n<style>\n  body {\n    font-family: -apple-system, Segoe UI, Arial, sans-serif;\n    max-width: 700px;\n    margin: 40px auto;\n    padding: 0 16px;\n    color: #222;\n    background: #fafafa;\n  }\n  h1 { font-size: 22px; }\n  h2 { font-size: 16px; margin-bottom: 8px; }\n  section { margin-bottom: 28px; }\n  textarea, input[type=text] {\n    width: 100%;\n    box-sizing: border-box;\n    padding: 8px;\n    font-size: 14px;\n    font-family: inherit;\n    border: 1px solid #ccc;\n    border-radius: 4px;\n  }\n  button {\n    padding: 8px 16px;\n    margin-top: 8px;\n    cursor: pointer;\n    border: 1px solid #888;\n    border-radius: 4px;\n    background: #fff;\n  }\n  button:hover { background: #eee; }\n  .message {\n    background: #eef3ff;\n    border: 1px solid #9ab4e6;\n    padding: 12px;\n    margin-bottom: 20px;\n    border-radius: 4px;\n    white-space: pre-wrap;\n  }\n  .message.error {\n    background: #fdecec;\n    border-color: #d99;\n  }\n  .confirm-box {\n    background: #fff8dc;\n    border: 1px solid #d9c56a;\n    padding: 12px;\n    margin-bottom: 20px;\n    border-radius: 4px;\n  }\n  .confirm-box form { display: inline-block; margin-right: 8px; }\n  .memory {\n    border-bottom: 1px solid #ddd;\n    padding: 8px 0;\n  }\n  .memory .importance {\n    color: #888;\n    font-size: 12px;\n  }\n</style>\n</head>\n<body>\n\n<h1>Personal AI Memory</h1>\n\n\n<div class=\"message error\">Nothing to log \u2014 the text field was empty.</div>\n\n\n\n\n<section>\n  <h2>Log something</h2>\n  <form method=\"post\" action=\"/log\">\n    <textarea name=\"text\" rows=\"3\" placeholder=\"What's on your mind?\"></textarea>\n    <button type=\"submit\">Log</button>\n  </form>\n</section>\n\n<section>\n  <h2>Ask</h2>\n  <form method=\"post\" action=\"/ask\">\n    <input type=\"text\" name=\"question\" placeholder=\"Ask a question...\">\n    <button type=\"submit\">Ask</button>\n  </form>\n</section>\n\n<section>\n  <h2>Recent memories</h2>\n  \n    <p>No memories yet.</p>\n  \n</section>\n\n</body>\n</html>",
+      "pending": null
+    },
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T055",
+    "title": "Whitespace form",
+    "category": "UI",
+    "setup": "POST /ask question=\"  \"",
+    "expected": "200 with visible error",
+    "actual": {
+      "http": 200,
+      "body": "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Personal AI Memory</title>\n<style>\n  body {\n    font-family: -apple-system, Segoe UI, Arial, sans-serif;\n    max-width: 700px;\n    margin: 40px auto;\n    padding: 0 16px;\n    color: #222;\n    background: #fafafa;\n  }\n  h1 { font-size: 22px; }\n  h2 { font-size: 16px; margin-bottom: 8px; }\n  section { margin-bottom: 28px; }\n  textarea, input[type=text] {\n    width: 100%;\n    box-sizing: border-box;\n    padding: 8px;\n    font-size: 14px;\n    font-family: inherit;\n    border: 1px solid #ccc;\n    border-radius: 4px;\n  }\n  button {\n    padding: 8px 16px;\n    margin-top: 8px;\n    cursor: pointer;\n    border: 1px solid #888;\n    border-radius: 4px;\n    background: #fff;\n  }\n  button:hover { background: #eee; }\n  .message {\n    background: #eef3ff;\n    border: 1px solid #9ab4e6;\n    padding: 12px;\n    margin-bottom: 20px;\n    border-radius: 4px;\n    white-space: pre-wrap;\n  }\n  .message.error {\n    background: #fdecec;\n    border-color: #d99;\n  }\n  .confirm-box {\n    background: #fff8dc;\n    border: 1px solid #d9c56a;\n    padding: 12px;\n    margin-bottom: 20px;\n    border-radius: 4px;\n  }\n  .confirm-box form { display: inline-block; margin-right: 8px; }\n  .memory {\n    border-bottom: 1px solid #ddd;\n    padding: 8px 0;\n  }\n  .memory .importance {\n    color: #888;\n    font-size: 12px;\n  }\n</style>\n</head>\n<body>\n\n<h1>Personal AI Memory</h1>\n\n\n<div class=\"message error\">Nothing to ask \u2014 the question field was empty.</div>\n\n\n\n\n<section>\n  <h2>Log something</h2>\n  <form method=\"post\" action=\"/log\">\n    <textarea name=\"text\" rows=\"3\" placeholder=\"What's on your mind?\"></textarea>\n    <button type=\"submit\">Log</button>\n  </form>\n</section>\n\n<section>\n  <h2>Ask</h2>\n  <form method=\"post\" action=\"/ask\">\n    <input type=\"text\" name=\"question\" placeholder=\"Ask a question...\">\n    <button type=\"submit\">Ask</button>\n  </form>\n</section>\n\n<section>\n  <h2>Recent memories</h2>\n  \n    <p>No memories yet.</p>\n  \n</section>\n\n</body>\n</html>",
+      "pending": null
+    },
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T056",
+    "title": "UI Nebius error presentation",
+    "category": "UI",
+    "setup": "POST /ask; handler raises RuntimeError",
+    "expected": "Readable service error within app page",
+    "actual": {
+      "http": 500,
+      "body": "<!doctype html>\n<html lang=en>\n<title>500 Internal Server Error</title>\n<h1>Internal Server Error</h1>\n<p>The server encountered an internal error and was unable to complete your request. Either the server is overloaded or there is an error in the application.</p>\n",
+      "pending": null
+    },
+    "result": "FAIL",
+    "failure_category": "UI",
+    "severity": "HIGH"
+  },
+  {
+    "id": "T057",
+    "title": "UI Neo4j error presentation",
+    "category": "UI",
+    "setup": "GET /; recent episodes raises service error",
+    "expected": "Readable service error within app page",
+    "actual": {
+      "http": 500,
+      "body": "<!doctype html>\n<html lang=en>\n<title>500 Internal Server Error</title>\n<h1>Internal Server Error</h1>\n<p>The server encountered an internal error and was unable to complete your request. Either the server is overloaded or there is an error in the application.</p>\n"
+    },
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T058",
+    "title": "Confirmation session isolation",
+    "category": "Skills/safety",
+    "setup": "Purchase pending for client A; client B confirms",
+    "expected": "Client B cannot confirm client A action",
+    "actual": {
+      "http": 200,
+      "executed_by_unrelated_client": 1
+    },
+    "result": "FAIL",
+    "failure_category": "tool/skill safety",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T059",
+    "title": "Pending survives unrelated ask",
+    "category": "Skills/safety",
+    "setup": "Pending purchase then hello",
+    "expected": "Purchase remains available until confirmation/cancellation",
+    "actual": null,
+    "result": "FAIL",
+    "failure_category": "tool/skill safety",
+    "severity": "MEDIUM"
+  },
+  {
+    "id": "T060",
+    "title": "Memory HTML escaping",
+    "category": "UI",
+    "setup": "Stored summary contains script tag",
+    "expected": "Escaped text, no script element",
+    "actual": "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Personal AI Memory</title>\n<style>\n  body {\n    font-family: -apple-system, Segoe UI, Arial, sans-serif;\n    max-width: 700px;\n    margin: 40px auto;\n    padding: 0 16px;\n    color: #222;\n    background: #fafafa;\n  }\n  h1 { font-size: 22px; }\n  h2 { font-size: 16px; margin-bottom: 8px; }\n  section { margin-bottom: 28px; }\n  textarea, input[type=text] {\n    width: 100%;\n    box-sizing: border-box;\n    padding: 8px;\n    font-size: 14px;\n    font-family: inherit;\n    border: 1px solid #ccc;\n    border-radius: 4px;\n  }\n  button {\n    padding: 8px 16px;\n    margin-top: 8px;\n    cursor: pointer;\n    border: 1px solid #888;\n    border-radius: 4px;\n    background: #fff;\n  }\n  button:hover { background: #eee; }\n  .message {\n    background: #eef3ff;\n    border: 1px solid #9ab4e6;\n    padding: 12px;\n    margin-bottom: 20px;\n    border-radius: 4px;\n    white-space: pre-wrap;\n  }\n  .message.error {\n    background: #fdecec;\n    border-color: #d99;\n  }\n  .confirm-box {\n    background: #fff8dc;\n    border: 1px solid #d9c56a;\n    padding: 12px;\n    margin-bottom: 20px;\n    border-radius: 4px;\n  }\n  .confirm-box form { display: inline-block; margin-right: 8px; }\n  .memory {\n    border-bottom: 1px solid #ddd;\n    padding: 8px 0;\n  }\n  .memory .importance {\n    color: #888;\n    font-size: 12px;\n  }\n</style>\n</head>\n<body>\n\n<h1>Personal AI Memory</h1>\n\n\n\n\n\n<section>\n  <h2>Log something</h2>\n  <form method=\"post\" action=\"/log\">\n    <textarea name=\"text\" rows=\"3\" placeholder=\"What's on your mind?\"></textarea>\n    <button type=\"submit\">Log</button>\n  </form>\n</section>\n\n<section>\n  <h2>Ask</h2>\n  <form method=\"post\" action=\"/ask\">\n    <input type=\"text\" name=\"question\" placeholder=\"Ask a question...\">\n    <button type=\"submit\">Ask</button>\n  </form>\n</section>\n\n<section>\n  <h2>Recent memories</h2>\n  \n    \n    <div class=\"memory\">\n      <div>&lt;script&gt;alert(1)&lt;/script&gt;</div>\n      <div class=\"importance\">importance: 0.5</div>\n    </div>\n    \n  \n</section>\n\n</body>\n</html>",
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T061",
+    "title": "Agent speaker isolation",
+    "category": "Entity separation",
+    "setup": "handle_request(home, speaker=isolated-person)",
+    "expected": "Retrieval receives isolated-person speaker",
+    "actual": {
+      "retrieval_args": [
+        "home"
+      ],
+      "retrieval_kwargs": {}
+    },
+    "result": "FAIL",
+    "failure_category": "retrieval",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T062",
+    "title": "Self reference normalization",
+    "category": "Entity separation",
+    "setup": "Model uses I/me/myself entity labels",
+    "expected": "All speaker references normalize to User; Rahul retained",
+    "actual": {
+      "entities": [
+        {
+          "name": "User"
+        }
+      ],
+      "states": [
+        {
+          "entity": "User",
+          "attribute": "city",
+          "value": "Sydney"
+        }
+      ],
+      "relations": [
+        {
+          "subject": "User",
+          "object": "Rahul"
+        }
+      ],
+      "summary": "I live in Sydney.",
+      "importance": 0.5,
+      "event_time": null,
+      "actions": []
+    },
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T063",
+    "title": "Read only skill",
+    "category": "Skills/safety",
+    "setup": "query_memory with no results",
+    "expected": "No results, no confirmation",
+    "actual": {
+      "question": "unknown",
+      "summary": null,
+      "message": "No results found."
+    },
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T064",
+    "title": "Reversible reminder mechanism",
+    "category": "Skills/safety",
+    "setup": "set_reminder(text=test,time=9am)",
+    "expected": "Stub returns confirmed; no confirmation gate",
+    "actual": {
+      "status": "confirmed",
+      "skill": "set_reminder",
+      "text": "test",
+      "time": "9am",
+      "note": "Reversible action - executed without confirmation by design."
+    },
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  }
+]

@@ -1,0 +1,72 @@
+[
+  {
+    "id": "T082",
+    "title": "Fresh application process preserves live memories",
+    "category": "Persistence \u2014 live Neo4j and new Flask process",
+    "setup": {
+      "speaker": "audit_55374553639d",
+      "operation": "Import Flask in a new interpreter and GET /"
+    },
+    "expected": "Previously written Sydney episode persists; recent memories rendered",
+    "actual": {
+      "http": 200,
+      "episodes": [
+        {
+          "raw_text": "I live in Sydney."
+        },
+        {
+          "raw_text": "I moved to Melbourne."
+        },
+        {
+          "raw_text": "I have moved to Pune."
+        },
+        {
+          "raw_text": "I am in Mumbai now."
+        }
+      ],
+      "page_contains_recent_memories": true
+    },
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T083",
+    "title": "Live immediate predecessor supersession edges",
+    "category": "Supersession \u2014 live graph inspection",
+    "setup": {
+      "speaker": "audit_55374553639d",
+      "sequence": "Sydney -> Melbourne -> Pune -> Mumbai"
+    },
+    "expected": "Mumbai directly supersedes only Pune, with prior chain retained",
+    "actual": [
+      {
+        "newer": "Melbourne",
+        "older": "Sydney"
+      },
+      {
+        "newer": "Pune",
+        "older": "Sydney"
+      },
+      {
+        "newer": "Pune",
+        "older": "Melbourne"
+      },
+      {
+        "newer": "Mumbai",
+        "older": "Sydney"
+      },
+      {
+        "newer": "Mumbai",
+        "older": "Melbourne"
+      },
+      {
+        "newer": "Mumbai",
+        "older": "Pune"
+      }
+    ],
+    "result": "FAIL",
+    "failure_category": "supersession",
+    "severity": "HIGH"
+  }
+]

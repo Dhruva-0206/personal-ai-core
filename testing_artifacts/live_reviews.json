@@ -1,0 +1,183 @@
+{
+  "T001": {
+    "result": "PASS"
+  },
+  "T002": {
+    "result": "PASS"
+  },
+  "T003": {
+    "result": "PASS"
+  },
+  "T004": {
+    "result": "PASS"
+  },
+  "T005": {
+    "result": "FAIL",
+    "failure_category": "retrieval",
+    "severity": "HIGH",
+    "notes": "Returned current Pune episode and requested more details instead of Melbourne; graph retains Melbourne as inactive city."
+  },
+  "T006": {
+    "result": "PASS"
+  },
+  "T007": {
+    "result": "FAIL",
+    "failure_category": "retrieval",
+    "severity": "HIGH",
+    "notes": "Claims previous residence before Mumbai is not stored; Pune remains present in graph."
+  },
+  "T008": {
+    "result": "FAIL",
+    "failure_category": "retrieval",
+    "severity": "HIGH",
+    "notes": "Returns Mumbai/current context rather than Melbourne before Pune."
+  },
+  "T009": {
+    "result": "PASS",
+    "notes": "Correct city, but answer includes literal <state_status> markup (cosmetic observation)."
+  },
+  "T010": {
+    "result": "PASS"
+  },
+  "T011": {
+    "result": "PASS"
+  },
+  "T012": {
+    "result": "PASS"
+  },
+  "T013": {
+    "result": "PASS"
+  },
+  "T014": {
+    "result": "FAIL",
+    "failure_category": "supersession",
+    "severity": "MEDIUM",
+    "notes": "Current Adelaide answer passes. Brisbane persists as a normal inactive city State, with no distinction between retracted error and genuine residence history."
+  },
+  "T015": {
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL",
+    "notes": "DNS resolution failed for configured services; request returned HTTP 500 and graph inspection also failed. Intended functional behavior is unassessed, including prerequisites. This is one shared run/environment outage, not evidence of 21 independent application bugs."
+  },
+  "T016": {
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL",
+    "notes": "DNS resolution failed for configured services; request returned HTTP 500 and graph inspection also failed. Intended functional behavior is unassessed, including prerequisites. This is one shared run/environment outage, not evidence of 21 independent application bugs."
+  },
+  "T017": {
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL",
+    "notes": "DNS resolution failed for configured services; request returned HTTP 500 and graph inspection also failed. Intended functional behavior is unassessed, including prerequisites. This is one shared run/environment outage, not evidence of 21 independent application bugs."
+  },
+  "T018": {
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL",
+    "notes": "DNS resolution failed for configured services; request returned HTTP 500 and graph inspection also failed. Intended functional behavior is unassessed, including prerequisites. This is one shared run/environment outage, not evidence of 21 independent application bugs."
+  },
+  "T019": {
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL",
+    "notes": "DNS resolution failed for configured services; request returned HTTP 500 and graph inspection also failed. Intended functional behavior is unassessed, including prerequisites. This is one shared run/environment outage, not evidence of 21 independent application bugs."
+  },
+  "T020": {
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL",
+    "notes": "DNS resolution failed for configured services; request returned HTTP 500 and graph inspection also failed. Intended functional behavior is unassessed, including prerequisites. This is one shared run/environment outage, not evidence of 21 independent application bugs."
+  },
+  "T021": {
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL",
+    "notes": "DNS resolution failed for configured services; request returned HTTP 500 and graph inspection also failed. Intended functional behavior is unassessed, including prerequisites. This is one shared run/environment outage, not evidence of 21 independent application bugs."
+  },
+  "T022": {
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL",
+    "notes": "DNS resolution failed for configured services; request returned HTTP 500 and graph inspection also failed. Intended functional behavior is unassessed, including prerequisites. This is one shared run/environment outage, not evidence of 21 independent application bugs."
+  },
+  "T023": {
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL",
+    "notes": "DNS resolution failed for configured services; request returned HTTP 500 and graph inspection also failed. Intended functional behavior is unassessed, including prerequisites. This is one shared run/environment outage, not evidence of 21 independent application bugs."
+  },
+  "T024": {
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL",
+    "notes": "DNS resolution failed for configured services; request returned HTTP 500 and graph inspection also failed. Intended functional behavior is unassessed, including prerequisites. This is one shared run/environment outage, not evidence of 21 independent application bugs."
+  },
+  "T025": {
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL",
+    "notes": "DNS resolution failed for configured services; request returned HTTP 500 and graph inspection also failed. Intended functional behavior is unassessed, including prerequisites. This is one shared run/environment outage, not evidence of 21 independent application bugs."
+  },
+  "T026": {
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL",
+    "notes": "DNS resolution failed for configured services; request returned HTTP 500 and graph inspection also failed. Intended functional behavior is unassessed, including prerequisites. This is one shared run/environment outage, not evidence of 21 independent application bugs."
+  },
+  "T027": {
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL",
+    "notes": "DNS resolution failed for configured services; request returned HTTP 500 and graph inspection also failed. Intended functional behavior is unassessed, including prerequisites. This is one shared run/environment outage, not evidence of 21 independent application bugs."
+  },
+  "T028": {
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL",
+    "notes": "DNS resolution failed for configured services; request returned HTTP 500 and graph inspection also failed. Intended functional behavior is unassessed, including prerequisites. This is one shared run/environment outage, not evidence of 21 independent application bugs."
+  },
+  "T029": {
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL",
+    "notes": "DNS resolution failed for configured services; request returned HTTP 500 and graph inspection also failed. Intended functional behavior is unassessed, including prerequisites. This is one shared run/environment outage, not evidence of 21 independent application bugs."
+  },
+  "T030": {
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL",
+    "notes": "DNS resolution failed for configured services; request returned HTTP 500 and graph inspection also failed. Intended functional behavior is unassessed, including prerequisites. This is one shared run/environment outage, not evidence of 21 independent application bugs."
+  },
+  "T031": {
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL",
+    "notes": "DNS resolution failed for configured services; request returned HTTP 500 and graph inspection also failed. Intended functional behavior is unassessed, including prerequisites. This is one shared run/environment outage, not evidence of 21 independent application bugs."
+  },
+  "T032": {
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL",
+    "notes": "DNS resolution failed for configured services; request returned HTTP 500 and graph inspection also failed. Intended functional behavior is unassessed, including prerequisites. This is one shared run/environment outage, not evidence of 21 independent application bugs."
+  },
+  "T033": {
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL",
+    "notes": "DNS resolution failed for configured services; request returned HTTP 500 and graph inspection also failed. Intended functional behavior is unassessed, including prerequisites. This is one shared run/environment outage, not evidence of 21 independent application bugs."
+  },
+  "T034": {
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL",
+    "notes": "DNS resolution failed for configured services; request returned HTTP 500 and graph inspection also failed. Intended functional behavior is unassessed, including prerequisites. This is one shared run/environment outage, not evidence of 21 independent application bugs."
+  },
+  "T035": {
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL",
+    "notes": "DNS resolution failed for configured services; request returned HTTP 500 and graph inspection also failed. Intended functional behavior is unassessed, including prerequisites. This is one shared run/environment outage, not evidence of 21 independent application bugs."
+  }
+}

@@ -15,6 +15,7 @@ import pipeline
 import skills
 
 app = Flask(__name__)
+graph_engine.ensure_schema()
 
 
 def _recent_episodes():

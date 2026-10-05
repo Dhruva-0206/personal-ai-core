@@ -1,0 +1,265 @@
+Purchase would execute: test for $1
+Reminder set: 'test' at 9am
+[
+  {
+    "id": "T036",
+    "title": "Malformed extraction shape",
+    "category": "Reliability",
+    "expected": "Safe schema-valid fallback or explicit validation result",
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T037",
+    "title": "Malformed extraction shape",
+    "category": "Reliability",
+    "expected": "Safe schema-valid fallback or explicit validation result",
+    "result": "FAIL",
+    "failure_category": "extraction",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T038",
+    "title": "Malformed extraction shape",
+    "category": "Reliability",
+    "expected": "Safe schema-valid fallback or explicit validation result",
+    "result": "FAIL",
+    "failure_category": "extraction",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T039",
+    "title": "Malformed extraction shape",
+    "category": "Reliability",
+    "expected": "Safe schema-valid fallback or explicit validation result",
+    "result": "FAIL",
+    "failure_category": "extraction",
+    "severity": "HIGH"
+  },
+  {
+    "id": "T040",
+    "title": "Malformed extraction shape",
+    "category": "Reliability",
+    "expected": "Safe schema-valid fallback or explicit validation result",
+    "result": "FAIL",
+    "failure_category": "extraction",
+    "severity": "HIGH"
+  },
+  {
+    "id": "T041",
+    "title": "Malformed tool JSON",
+    "category": "Reliability",
+    "expected": "Controlled error without uncaught exception",
+    "result": "FAIL",
+    "failure_category": "tool/skill safety",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T042",
+    "title": "Unknown tool",
+    "category": "Reliability",
+    "expected": "Controlled rejection without uncaught exception",
+    "result": "FAIL",
+    "failure_category": "tool/skill safety",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T043",
+    "title": "Missing tool argument",
+    "category": "Reliability",
+    "expected": "Controlled validation error without crash",
+    "result": "FAIL",
+    "failure_category": "tool/skill safety",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T044",
+    "title": "Empty model choices",
+    "category": "Reliability",
+    "expected": "Controlled model error without crash",
+    "result": "FAIL",
+    "failure_category": "model instability",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T045",
+    "title": "Empty agent answer",
+    "category": "Reliability",
+    "expected": "Nonempty user-facing response",
+    "result": "FAIL",
+    "failure_category": "model instability",
+    "severity": "MEDIUM"
+  },
+  {
+    "id": "T046",
+    "title": "Nebius unavailable",
+    "category": "Reliability",
+    "expected": "Controlled error without crash",
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T047",
+    "title": "Multiple model tool calls",
+    "category": "Reliability",
+    "expected": "Both calls handled or explicit unsupported notice",
+    "result": "FAIL",
+    "failure_category": "agent reasoning",
+    "severity": "HIGH"
+  },
+  {
+    "id": "T048",
+    "title": "Failed tool",
+    "category": "Reliability",
+    "expected": "Controlled error without crash",
+    "result": "FAIL",
+    "failure_category": "tool/skill safety",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T049",
+    "title": "High stakes gate",
+    "category": "Skills/safety",
+    "expected": "needs_confirmation without executing",
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T050",
+    "title": "Agent initiated high stakes",
+    "category": "Skills/safety",
+    "expected": "Pending confirmation; zero executions",
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T051",
+    "title": "UI cancellation",
+    "category": "UI",
+    "expected": "200 Cancelled; pending cleared",
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T052",
+    "title": "UI confirmation",
+    "category": "UI",
+    "expected": "200 Confirmed; pending cleared",
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T053",
+    "title": "No pending confirmation",
+    "category": "UI",
+    "expected": "200 Nothing pending",
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T054",
+    "title": "Whitespace form",
+    "category": "UI",
+    "expected": "200 with visible error",
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T055",
+    "title": "Whitespace form",
+    "category": "UI",
+    "expected": "200 with visible error",
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T056",
+    "title": "UI Nebius error presentation",
+    "category": "UI",
+    "expected": "Readable service error within app page",
+    "result": "FAIL",
+    "failure_category": "UI",
+    "severity": "HIGH"
+  },
+  {
+    "id": "T057",
+    "title": "UI Neo4j error presentation",
+    "category": "UI",
+    "expected": "Readable service error within app page",
+    "result": "FAIL",
+    "failure_category": "infrastructure",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T058",
+    "title": "Confirmation session isolation",
+    "category": "Skills/safety",
+    "expected": "Client B cannot confirm client A action",
+    "result": "FAIL",
+    "failure_category": "tool/skill safety",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T059",
+    "title": "Pending survives unrelated ask",
+    "category": "Skills/safety",
+    "expected": "Purchase remains available until confirmation/cancellation",
+    "result": "FAIL",
+    "failure_category": "tool/skill safety",
+    "severity": "MEDIUM"
+  },
+  {
+    "id": "T060",
+    "title": "Memory HTML escaping",
+    "category": "UI",
+    "expected": "Escaped text, no script element",
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T061",
+    "title": "Agent speaker isolation",
+    "category": "Entity separation",
+    "expected": "Retrieval receives isolated-person speaker",
+    "result": "FAIL",
+    "failure_category": "retrieval",
+    "severity": "CRITICAL"
+  },
+  {
+    "id": "T062",
+    "title": "Self reference normalization",
+    "category": "Entity separation",
+    "expected": "All speaker references normalize to User; Rahul retained",
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T063",
+    "title": "Read only skill",
+    "category": "Skills/safety",
+    "expected": "No results, no confirmation",
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  },
+  {
+    "id": "T064",
+    "title": "Reversible reminder mechanism",
+    "category": "Skills/safety",
+    "expected": "Stub returns confirmed; no confirmation gate",
+    "result": "PASS",
+    "failure_category": null,
+    "severity": null
+  }
+]

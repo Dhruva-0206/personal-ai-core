@@ -1,0 +1,85 @@
+[
+  {
+    "id": "T065",
+    "title": "Historical lookup with multiple past states",
+    "category": "Controlled graph semantics",
+    "setup": "Sydney -> Melbourne -> Pune -> Mumbai; ask before Pune",
+    "expected": "Melbourne",
+    "actual": null,
+    "result": "FAIL",
+    "failure_category": "retrieval",
+    "severity": "HIGH"
+  },
+  {
+    "id": "T066",
+    "title": "Historical lookup wrong subject",
+    "category": "Controlled graph semantics",
+    "setup": "Only Rahul has superseded city Canberra; ask my history",
+    "expected": "No confident User history match",
+    "actual": {
+      "source": "historical_state_lookup",
+      "attribute": "city",
+      "value": "Canberra",
+      "entity": "Rahul",
+      "confidence": "high"
+    },
+    "result": "FAIL",
+    "failure_category": "retrieval",
+    "severity": "HIGH"
+  },
+  {
+    "id": "T067",
+    "title": "Direct lookup wrong subject",
+    "category": "Controlled graph semantics",
+    "setup": "Only Rahul has an active city; ask my city",
+    "expected": "No confident User match",
+    "actual": {
+      "source": "direct_lookup",
+      "attribute": "city",
+      "value": "Canberra",
+      "entity": "Rahul",
+      "confidence": "high"
+    },
+    "result": "FAIL",
+    "failure_category": "retrieval",
+    "severity": "HIGH"
+  },
+  {
+    "id": "T068",
+    "title": "Direct lookup with distinct subjects",
+    "category": "Controlled graph semantics",
+    "setup": "User Adelaide; Rahul Canberra; ask my city",
+    "expected": "User Adelaide direct match",
+    "actual": null,
+    "result": "FAIL",
+    "failure_category": "retrieval",
+    "severity": "HIGH"
+  },
+  {
+    "id": "T069",
+    "title": "Supersession links immediate predecessor",
+    "category": "Controlled graph semantics",
+    "setup": "Sydney -> Melbourne -> Pune -> Mumbai",
+    "expected": "Mumbai SUPERSEDES only Pune; prior chain preserved",
+    "actual": {
+      "queries": [
+        "MATCH (e:Entity {speaker: $speaker, name: $name})-[:OF_ENTITY]-(s:State {attribute: $attribute}) WHERE s.active = true SET s.active = false, s.superseded_at = datetime()",
+        "MATCH (e:Entity {speaker: $speaker, name: $name}), (ep:Episode {id: $episode_id}) CREATE (s:State {id: $state_id, attribute: $attribute, value: $value, attribute_embedding: $attribute_embedding, active: true, created_at: datetime()}) CREATE (s)-[:OF_ENTITY]->(e) CREATE (ep)-[:HAS_STATE]->(s) WITH s, e OPTIONAL MATCH (e)-[:OF_ENTITY]-(old:State {attribute: $attribute}) WHERE old.id <> s.id AND old.active = false AND old.superseded_at IS NOT NULL FOREACH (_ IN CASE WHEN old IS NOT NULL THEN [1] ELSE [] END |   MERGE (s)-[:SUPERSEDES]->(old))"
+      ]
+    },
+    "result": "FAIL",
+    "failure_category": "supersession",
+    "severity": "HIGH"
+  },
+  {
+    "id": "T070",
+    "title": "Substring merges distinct similar names",
+    "category": "Controlled graph semantics",
+    "setup": "Existing Ann; incoming Anna with distinct vector",
+    "expected": "Anna remains distinct",
+    "actual": "Ann",
+    "result": "FAIL",
+    "failure_category": "entity resolution",
+    "severity": "HIGH"
+  }
+]
