@@ -892,9 +892,92 @@ retrieval-augmented reasoning about the user's evolving context.
   LLM-dependent; the direct_state_lookup checks are the deterministic
   evidence.
 
+- Batch fix: entity over-merge, dead speaker param, uncaught exceptions,
+  per-session confirmations — 2026-10-08. Four fixes from the QA audit
+  (see "QA audit findings"), each its own commit with its own test.
+  Fix 1, Ann/Anna entity over-merge (8760b12, graph_engine.py): a
+  two-layer problem. Layer 2 used raw substring containment ("anna"
+  contains "ann"), AND Layer 3 merged on name-embedding cosine alone —
+  Ann/Anna scores 0.954 and Ann/Anne 0.954 against the 0.93 threshold —
+  so fixing only Layer 2 would have left the merge live. Layer 2 is now
+  whole-word containment (every word of the shorter name is a whole word
+  of the other: "Rahul" matches "Rahul Sharma", "Ann" does not match
+  "Anna"). Layer 3's embedding score now only proposes candidates, and a
+  new _llm_match_entity() confirms with a closed-list, strictly
+  validated LLM call (same pattern as _llm_match_attribute) that fails
+  closed to "distinct" — a wrong merge destroys data, a wrong split
+  doesn't. The call only runs when an embedding candidate exists.
+  Side effects: the gate is conservative, so a typo'd name may now
+  create a duplicate entity (probe: "Mumbay" was NOT merged into
+  "Mumbai"); and "New York" still matches "York" under whole-word
+  containment, as it did before. Test: test_entity_resolution_live.py
+  12/12; the live part fails 4 checks on the old code (Ann's Hobart
+  superseded by Darwin, Anna never created).
+  Fix 4, dead speaker parameter (0c140ee, skills.py/agent.py):
+  handle_request(speaker=...) never reached retrieval (retrieve() got
+  speaker=None). run_skill() now takes the caller's speaker as a
+  POSITIONAL-ONLY argument, so a model-supplied argument named "speaker"
+  or "name" lands in kwargs instead of colliding; skills flagged
+  speaker_scoped (query_memory) receive the trusted value, overwriting
+  anything the model sent. Test: test_speaker_scoping.py 9/9 (offline
+  fake-model checks plus a live two-speaker Adelaide/Brisbane check that
+  never touches DEFAULT_SPEAKER); old code showed retrieve() receiving
+  None for speaker='alice'.
+  Fix 2, uncaught exceptions (e4226de, agent.py/skills.py): the single
+  broadest fix of this session. handle_request() now ALWAYS returns a
+  non-empty string and never raises: model calls go through guarded
+  helpers; empty/missing choices, empty tool_calls, malformed or
+  non-object arguments, unknown tools, missing required arguments,
+  wrong argument types, skills that raise, a failing retry or follow-up
+  call, and empty/None answers all become a short user-facing error.
+  New skills.validate_args() checks shape, known skill, required fields
+  and string types before dispatch, so an invalid make_purchase is
+  rejected and never becomes a pending confirmation. Undeclared
+  arguments are DROPPED, not rejected, which keeps Fix 4's trusted
+  speaker authoritative. The existing malformed/refused-content retry
+  logic is unchanged and runs inside the guards; a last-resort catch-all
+  logs the traceback. Test: test_agent_guards_isolated.py 37/37 (fake
+  client, no live calls); the old code failed 21 of 28 evaluated checks.
+  Still not handled: only the first of several tool calls runs (T047, a
+  documented limitation, not an exception).
+  Fix 3, per-session pending confirmations (7e8dd09, agent.py/web_app.py/
+  cli.py): the module-level agent.pending_confirmation global is gone,
+  replaced by a per-session dict with get_pending()/clear_pending(),
+  keyed by a session id carried in Flask's signed session cookie (random
+  per-process SECRET_KEY; a forged cookie just yields a fresh empty
+  session). One client can no longer see or confirm another's action. A
+  pending action PERSISTS across unrelated asks and is cleared only by an
+  explicit confirm or cancel (the safer default: silently dropping it
+  could lose an approval the user still means to give). A new
+  high-stakes request in the same session REPLACES the older pending one
+  rather than stacking, so only the latest action can be confirmed.
+  Known simplifications, deliberately not built: no expiry on pending
+  actions (an abandoned one lives until the process exits), and the CLI
+  uses the default session (single user). Test:
+  test_pending_confirmation_sessions.py 16/16 (HTTP-level, fake model and
+  purchase skill, no live services); the old code fails 9 of 16
+  (cross-client visibility/confirm, unrelated ask clearing).
+  Also (7abef59): fixed a flaky agent-level check in
+  test_subject_scoping_live.py. "Says Adelaide, not Canberra" failed
+  answers that were correct but mentioned Rahul's Canberra while
+  explaining what they ignored (it failed in 3 of 6 full-suite runs).
+  Both agent checks now assert the right city is named and the wrong one
+  isn't CLAIMED as the user's home (claims_canberra_as_home(),
+  phrase-based on unambiguous you-statements); 7/7 on five consecutive
+  runs afterwards. The deterministic direct_state_lookup checks are
+  unchanged and remain the real evidence.
+  Final combined run: test_offline 7/7, test_failure_detection 5/5,
+  test_agent_retry_isolated 8/8, test_followup_retry_isolated 14/14,
+  test_agent_guards_isolated 37/37, test_pending_confirmation_sessions
+  16/16, test_subject_scoping_live 7/7, test_historical_anchor_live 9/9,
+  test_entity_resolution_live 12/12, test_speaker_scoping 9/9,
+  test_regression_live 6/6 (run against a throwaway speaker; it resets
+  "default" when run as-is). test_web_app.py (print-only) was updated for
+  the per-session API but not re-run, since it writes to "default".
+
 ## Test files
 
-Reference only — all 8 files are committed. Run from the project root.
+Reference only — all 15 files are committed (11 self-checking, 4 diagnostics). Run from the project root.
 
 Self-checking suites (print PASS/FAIL per check, nonzero exit on failure):
 - test_offline.py — `python test_offline.py`. Pure unit tests (cosine,
@@ -910,6 +993,27 @@ Self-checking suites (print PASS/FAIL per check, nonzero exit on failure):
 - test_followup_retry_isolated.py — `python test_followup_retry_isolated.py`.
   Follow-up-call retry logic, same fake-client approach. No credentials,
   no network. Expected: 14/14.
+- test_agent_guards_isolated.py — `python test_agent_guards_isolated.py`.
+  Response-shape and tool-call guards on handle_request (malformed JSON,
+  unknown tool, missing/wrong-type args, empty choices/tool_calls, model,
+  retry, follow-up and skill failures, empty answers, rejected high-stakes
+  calls). Fake client, no credentials, no network. Expected: 37/37.
+- test_pending_confirmation_sessions.py — `python test_pending_confirmation_sessions.py`.
+  Per-client pending confirmations through the Flask test client (isolation,
+  forged cookie, persistence across unrelated asks, replace-on-new-request).
+  Fake model and purchase skill, no credentials, no network. Expected: 16/16.
+- test_entity_resolution_live.py — `python test_entity_resolution_live.py`.
+  Whole-word helper checks (offline) plus a LIVE Ann/Anna/Ann scenario:
+  needs Nebius + Neo4j; one throwaway "regress_entity_*" speaker, deleted
+  afterwards, never touches "default". Expected: 12/12. The live part
+  involves LLM extraction/judgment — re-run before treating one failure as
+  a bug.
+- test_speaker_scoping.py — `python test_speaker_scoping.py`. Offline
+  fake-model checks that the speaker reaches retrieve() and can't be
+  overridden by model arguments, plus a LIVE two-speaker check through
+  query_memory and the agent: needs Nebius + Neo4j; throwaway
+  "regress_speaker_*" speakers, never touches "default" or
+  config.DEFAULT_SPEAKER. Expected: 9/9.
 - test_historical_anchor_live.py — `python test_historical_anchor_live.py`.
   LIVE: needs Nebius + Neo4j. Self-checking (9 checks); one throwaway
   "regress_anchor_*" speaker, deleted afterwards, never touches "default".
@@ -944,20 +1048,17 @@ Neo4j credentials):
 
 ## Next up
 
-Ordered by the QA audit verification (see "QA audit findings" above;
-wrong-subject direct lookup and historical anchoring are fixed, see
-Build log):
-(1) Ann/Anna: make entity-resolution Layer 2 whole-word or
-LLM-gated instead of bare substring. (2) Guard tool-call parse/dispatch
-in handle_request (JSON parse, unknown tool, arg type/missing, empty
-choices/tool_calls, tool and retry exceptions, empty answer) to return a
-controlled error. (3) Scope pending-confirmation per session and stop
-clearing it on unrelated asks. (4) Remove or thread through the dead
-speaker parameter.
-Then the earlier items: (5) Marathon/Hyrox-class hierarchy-invention in
-the follow-up call: the model imposes ranking hierarchy on any scored
-list; next step is a targeted follow-up-prompt guardrail to present
-comparably-scored results as co-equal facts. (6) Question-text
-self-reference normalization gap (lower priority, unconfirmed harm).
-(7) Continue real usage via the web interface rather than synthetic
-testing.
+The QA-audit fixes are done (wrong-subject lookup, historical anchoring,
+entity over-merge, exception guards, per-session confirmations, dead
+speaker param — see Build log). What remains, in order, now weighted
+toward demo readiness:
+(1) Marathon/Hyrox-class hierarchy-invention in the follow-up call: the
+model imposes a ranking hierarchy on any scored list; next step is a
+targeted follow-up-prompt guardrail to present comparably-scored results
+as co-equal facts. (2) Question-text self-reference normalization gap
+(lower priority, unconfirmed harm). (3) Continue real usage via the web
+interface rather than synthetic testing. (4) Hosted/deployed demo.
+(5) Demo video. (6) README: explicit Nebius/Nemotron callout, submission
+project description, and Nebius/NVIDIA tool feedback. (7) Stub/open
+endpoints plus animated clips for future-scope integrations (wearables,
+location, glasses) per the original wider vision.
