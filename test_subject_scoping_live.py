@@ -75,6 +75,20 @@ def agent_answer(speaker, question):
         return f"<raised {e!r}>"
 
 
+def claims_canberra_as_home(answer):
+    """
+    True if the answer asserts Canberra as the USER's own home. Merely
+    mentioning Rahul's Canberra (a correct answer often does, to explain what
+    it ignored) is not a claim. Phrase-based, so a novel phrasing could slip
+    through: the deterministic evidence is the direct_state_lookup checks.
+    """
+    lowered = answer.lower().replace("*", "")
+    return any(p in lowered for p in (
+        "you live in canberra", "you currently live in canberra", "you reside in canberra",
+        "you are in canberra", "you're in canberra", "your home is canberra", "your city is canberra",
+    ))
+
+
 def setup():
     safe_print("== Setup ==")
     for text in ("I live in Adelaide.", "My friend Rahul lives in Canberra."):
@@ -109,8 +123,8 @@ def test_user_and_rahul_both_have_cities():
           r is not None and r["entity"] == "Rahul" and "canberra" in r["value"].lower(), f"result: {r!r}")
 
     answer = agent_answer(WITH_CITY, "where do I live")
-    check("agent 'where do I live' says Adelaide, not Canberra",
-          "adelaide" in answer.lower() and "canberra" not in answer.lower(), f"answer: {answer!r}")
+    check("agent 'where do I live' says Adelaide and does not claim Canberra as the user's home",
+          "adelaide" in answer.lower() and not claims_canberra_as_home(answer), f"answer: {answer!r}")
     answer = agent_answer(WITH_CITY, "where does Rahul live")
     check("agent 'where does Rahul live' says Canberra",
           "canberra" in answer.lower(), f"answer: {answer!r}")
@@ -126,10 +140,8 @@ def test_user_has_no_city():
           r is not None and r["entity"] == "Rahul" and "canberra" in r["value"].lower(), f"result: {r!r}")
 
     answer = agent_answer(NO_CITY, "where do I live")
-    lowered = answer.lower().replace("*", "")
     check("agent 'where do I live' does not assert Canberra as the user's home",
-          "you live in canberra" not in lowered and "you currently live in canberra" not in lowered
-          and "you reside in canberra" not in lowered, f"answer: {answer!r}")
+          not claims_canberra_as_home(answer), f"answer: {answer!r}")
 
 
 def cleanup():
