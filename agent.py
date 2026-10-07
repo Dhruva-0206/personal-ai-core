@@ -146,7 +146,7 @@ def handle_request(user_message: str, speaker: str = None) -> str:
     name = tool_call.function.name
     args = json.loads(tool_call.function.arguments)
 
-    result = skills.run_skill(name, **args)
+    result = skills.run_skill(name, speaker, **args)
 
     if result.get("status") == "needs_confirmation":
         # A high_stakes skill must never auto-execute just because an LLM

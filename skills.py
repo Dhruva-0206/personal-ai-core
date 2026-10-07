@@ -28,6 +28,10 @@ class Skill:
     description: str
     func: Callable[..., dict]
     parameters: dict
+    # True for skills that read per-speaker data: run_skill() then passes
+    # them the caller's trusted speaker as a `speaker` keyword, overwriting
+    # anything the model put in its own arguments.
+    speaker_scoped: bool = False
 
 
 REGISTRY: dict[str, Skill] = {}
@@ -42,9 +46,12 @@ def register(skill: Skill):
 QUERY_MEMORY_TOP_N = 5
 
 
-def _query_memory(question: str) -> dict:
-    """REAL skill: returns the top QUERY_MEMORY_TOP_N retrieval.retrieve() results for a question."""
-    results = retrieval.retrieve(question)
+def _query_memory(question: str, speaker: str = None) -> dict:
+    """
+    REAL skill: returns the top QUERY_MEMORY_TOP_N retrieval.retrieve() results
+    for a question, scoped to `speaker` (None -> config.DEFAULT_SPEAKER).
+    """
+    results = retrieval.retrieve(question, speaker=speaker)
     if not results:
         return {"question": question, "results": [], "message": "No results found."}
     fields = ("summary", "combined_score", "similarity", "importance", "recency", "state_status", "lanes")
@@ -82,6 +89,7 @@ register(Skill(
         "properties": {"question": {"type": "string"}},
         "required": ["question"],
     },
+    speaker_scoped=True,
 ))
 register(Skill(
     name="set_reminder",
@@ -140,13 +148,21 @@ def _get_skill(name: str) -> Skill:
     return skill
 
 
-def run_skill(name: str, **kwargs) -> dict:
+def run_skill(name: str, speaker: str = None, /, **kwargs) -> dict:
     """
     read_only and reversible_write skills execute immediately. high_stakes
     skills never execute here — this returns a "needs_confirmation"
     description instead; only confirm_skill() actually runs them.
+
+    `speaker` is the caller's trusted speaker (positional-only, so a
+    model-supplied argument that happens to be called "speaker" or "name"
+    lands in kwargs instead of colliding). Speaker-scoped skills receive it
+    as a `speaker` keyword, replacing any "speaker" the model supplied.
     """
     skill = _get_skill(name)
+
+    if skill.speaker_scoped:
+        kwargs = {**kwargs, "speaker": speaker}
 
     if skill.tier == "read_only":
         return skill.func(**kwargs)
