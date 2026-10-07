@@ -817,6 +817,39 @@ retrieval-augmented reasoning about the user's evolving context.
   T022, T023). The reminder stub (T033) is known. test_offline.py 7/7
   on main.
 
+- Fixed wrong-subject direct lookup (QA audit finding 1), 2026-10-07.
+  Root cause: direct_state_lookup()'s two state queries matched
+  (e:Entity {speaker})-[:OF_ENTITY]-(s:State {attribute}) with no filter
+  on which entity the question was about, so any entity holding the
+  attribute matched; with only Rahul having a city, "where do I live"
+  returned Rahul/Canberra at confidence high, and with several entities
+  holding it the len(rows) != 1 check returned None. The old docstring
+  ("Scoped across ALL of this speaker's entities") wrongly described
+  this as intentional.
+  Fix (retrieval.py): the existing classification call now also returns a
+  "subject" ("self", or the exact name of one of the speaker's real
+  entities, or null) — no extra LLM call; classify_temporal_and_subject()
+  covers the fast attribute path and classify_question() (now taking the
+  entity list) the slow path. _resolve_subject() maps "self" to the
+  canonical "User" and requires any other name to match an existing
+  entity case-insensitively, else None (never trusts an invented name).
+  Both state queries now filter on e.name = the resolved subject, so
+  cross-entity leakage is structurally impossible; an unresolvable
+  subject returns None and the fuzzy lanes handle the question.
+  classify_temporal_intent() is now unused by the lookup but left in
+  place.
+  Evidence: new test_subject_scoping_live.py (throwaway speakers only,
+  never touches "default") fails 4 checks on the pre-fix code, including
+  the exact Rahul/Canberra direct result, and passes 7/7 on the fix.
+  Known-weak check: the agent-level "User has no city" check passed on
+  BOTH old and new code (the LLM answered sensibly either way), so it is
+  not proof in either direction; the deterministic direct_state_lookup
+  checks are the real evidence. Agent-level checks are LLM-dependent —
+  re-run once before treating a single failure as a regression. Other
+  suites unchanged: test_offline 7/7, test_failure_detection 5/5,
+  test_agent_retry_isolated 8/8, test_followup_retry_isolated 14/14,
+  test_regression_live 6/6 (run against a throwaway speaker).
+
 ## Test files
 
 Reference only — all 8 files are committed. Run from the project root.
@@ -835,6 +868,11 @@ Self-checking suites (print PASS/FAIL per check, nonzero exit on failure):
 - test_followup_retry_isolated.py — `python test_followup_retry_isolated.py`.
   Follow-up-call retry logic, same fake-client approach. No credentials,
   no network. Expected: 14/14.
+- test_subject_scoping_live.py — `python test_subject_scoping_live.py`. LIVE:
+  needs Nebius + Neo4j. Self-checking (7 checks); uses throwaway
+  "regress_subject_*" speakers and deletes them, never touches "default".
+  Regression test for wrong-subject direct lookup. Agent-level checks are
+  LLM-dependent — re-run before treating one failure as a bug.
 - test_regression_live.py — `python test_regression_live.py`. LIVE: needs
   Nebius Token Factory and Neo4j Aura credentials in .env and an Aura
   instance that is not auto-paused. RESETS the "default" speaker, logs the
@@ -858,23 +896,21 @@ Neo4j credentials):
 
 ## Next up
 
-Ordered by the QA audit verification (see "QA audit findings" above):
-(1) Wrong-subject direct lookup: scope direct_state_lookup() to the
-asking entity (self entity for first-person questions, the named entity
-otherwise) instead of any entity with the attribute. (2) Anchor-aware
-historical lookup: use the "before X" anchor to return the state
+Ordered by the QA audit verification (see "QA audit findings" above;
+wrong-subject direct lookup is fixed, see Build log):
+(1) Anchor-aware historical lookup: use the "before X" anchor to return the state
 superseded just before it; add a live 4-state-chain test asked at every
-anchor. (3) Ann/Anna: make entity-resolution Layer 2 whole-word or
-LLM-gated instead of bare substring. (4) Guard tool-call parse/dispatch
+anchor. (2) Ann/Anna: make entity-resolution Layer 2 whole-word or
+LLM-gated instead of bare substring. (3) Guard tool-call parse/dispatch
 in handle_request (JSON parse, unknown tool, arg type/missing, empty
 choices/tool_calls, tool and retry exceptions, empty answer) to return a
-controlled error. (5) Scope pending-confirmation per session and stop
-clearing it on unrelated asks. (6) Remove or thread through the dead
+controlled error. (4) Scope pending-confirmation per session and stop
+clearing it on unrelated asks. (5) Remove or thread through the dead
 speaker parameter.
-Then the earlier items: (7) Marathon/Hyrox-class hierarchy-invention in
+Then the earlier items: (6) Marathon/Hyrox-class hierarchy-invention in
 the follow-up call: the model imposes ranking hierarchy on any scored
 list; next step is a targeted follow-up-prompt guardrail to present
-comparably-scored results as co-equal facts. (8) Question-text
+comparably-scored results as co-equal facts. (7) Question-text
 self-reference normalization gap (lower priority, unconfirmed harm).
-(9) Continue real usage via the web interface rather than synthetic
+(8) Continue real usage via the web interface rather than synthetic
 testing.
