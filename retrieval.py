@@ -315,37 +315,91 @@ def classify_temporal_intent(question: str) -> str:
     return "current"
 
 
-_COMBINED_CLASSIFY_PROMPT_TEMPLATE = """You are matching a user's question to one of their known tracked \
-attributes, and separately classifying whether it's asking about a CURRENT/present value or a PAST/PREVIOUS \
-value. Known attributes: {attributes}.
+SELF_ENTITY_NAME = "User"
 
-Do both in a single response. Respond with ONLY valid JSON, no prose, no markdown code fences, in exactly \
-this shape: {{"attribute": "<one of the known attributes>", "temporal": "current"}} or \
-{{"attribute": null, "temporal": "historical"}} (attribute is null if none of the known attributes apply; \
-temporal is "current" or "historical" regardless of whether an attribute matched). Never invent an \
+_SUBJECT_RULES = """"subject" says WHO the question is about: the exact string "self" if it is about the \
+person asking (I, me, my, mine, myself), otherwise the EXACT name of one of these known entities: \
+{entities} — or null if it is about someone or something not in that list. Never invent a name that is \
+not in the list."""
+
+_TEMPORAL_SUBJECT_PROMPT_TEMPLATE = """You are classifying a user's question two ways: (1) "temporal": \
+"current" if it asks about the CURRENT/present value of something, "historical" if it asks about a \
+PAST/PREVIOUS value; (2) """ + _SUBJECT_RULES + """
+
+Respond with ONLY valid JSON, no prose, no markdown code fences, in exactly this shape: \
+{{"temporal": "current", "subject": "self"}}"""
+
+_COMBINED_CLASSIFY_PROMPT_TEMPLATE = """You are matching a user's question to one of their known tracked \
+attributes, classifying whether it's asking about a CURRENT/present value or a PAST/PREVIOUS value, and \
+saying who it is about. Known attributes: {attributes}.
+
+Do all three in a single response. "attribute" is one of the known attributes (exact string), or null if \
+none apply; "temporal" is "current" or "historical" regardless of whether an attribute matched; """ + _SUBJECT_RULES + """
+
+Respond with ONLY valid JSON, no prose, no markdown code fences, in exactly this shape: \
+{{"attribute": "<one of the known attributes>", "temporal": "current", "subject": "self"}}. Never invent an \
 attribute name that is not in the provided list — only ever return one of the exact strings given, or \
 null."""
 
 
-def classify_question(question: str, known_attributes: list[str]) -> dict:
+def _resolve_subject(raw, entity_names: list[str]) -> str | None:
     """
-    Combines attribute matching's LLM layer and temporal-intent
-    classification into a single llm_client.extract_json() call, for the
-    case where the cheap attribute-matching layers already came back
-    empty and an LLM call is needed anyway — folds the temporal question
-    in for free instead of paying for a second sequential LLM round-trip
-    (classify_temporal_intent()) right after.
+    Maps the model's "subject" answer onto an actual Entity name, or None.
+    "self" resolves to the canonical self entity ("User", per
+    extraction.py's self-reference normalization); anything else must
+    case-insensitively equal an entity that really exists for this
+    speaker. Never trusts an invented name — None means "don't guess".
+    """
+    if not isinstance(raw, str):
+        return None
+    wanted = raw.strip().lower()
+    if wanted == "self":
+        return SELF_ENTITY_NAME
+    for name in entity_names:
+        if name.lower() == wanted:
+            return name
+    return None
 
-    Validates each field independently, with the same safe-default rules
-    as the two calls this replaces: "attribute" is forced to None unless
-    it's exactly one of known_attributes (never trust an invented name);
-    "temporal" defaults to "current" unless it's exactly "current" or
-    "historical" (the safer default — misclassifying as "historical"
-    would substitute a superseded value for the current one). If the call
-    fails or parses badly, extract_json() returns {} and both fields fall
-    through to their defaults: {"attribute": None, "temporal": "current"}.
+
+def classify_temporal_and_subject(question: str, entity_names: list[str]) -> dict:
     """
-    system_prompt = _COMBINED_CLASSIFY_PROMPT_TEMPLATE.format(attributes=known_attributes)
+    One LLM call returning {"temporal": ..., "subject": <entity name|None>}.
+    Used when the cheap attribute layers already resolved the attribute.
+    Same safe default as classify_temporal_intent() for temporal ("current");
+    an unresolvable subject is None, and the caller must not look anything
+    up in that case.
+    """
+    system_prompt = _TEMPORAL_SUBJECT_PROMPT_TEMPLATE.format(entities=entity_names)
+    classification = llm_client.extract_json(system_prompt, question)
+    temporal = classification.get("temporal")
+    if temporal not in ("current", "historical"):
+        temporal = "current"
+    return {
+        "temporal": temporal,
+        "subject": _resolve_subject(classification.get("subject"), entity_names),
+    }
+
+
+def classify_question(question: str, known_attributes: list[str], entity_names: list[str]) -> dict:
+    """
+    Combines attribute matching's LLM layer, temporal-intent
+    classification and subject resolution (whose state is being asked
+    about) into a single llm_client.extract_json() call, for the case where
+    the cheap attribute-matching layers already came back empty and an LLM
+    call is needed anyway.
+
+    Validates each field independently: "attribute" is forced to None
+    unless it's exactly one of known_attributes (never trust an invented
+    name); "temporal" defaults to "current" unless it's exactly "current"
+    or "historical" (misclassifying as "historical" would substitute a
+    superseded value for the current one); "subject" resolves to an
+    existing entity name via _resolve_subject() or None. If the call fails
+    or parses badly, extract_json() returns {} and the result is
+    {"attribute": None, "temporal": "current", "subject": None}.
+    """
+    system_prompt = _COMBINED_CLASSIFY_PROMPT_TEMPLATE.format(
+        attributes=known_attributes, entities=entity_names,
+    )
     classification = llm_client.extract_json(system_prompt, question)
 
     attribute = classification.get("attribute")
@@ -356,44 +410,54 @@ def classify_question(question: str, known_attributes: list[str]) -> dict:
     if temporal not in ("current", "historical"):
         temporal = "current"
 
-    return {"attribute": attribute, "temporal": temporal}
+    return {
+        "attribute": attribute,
+        "temporal": temporal,
+        "subject": _resolve_subject(classification.get("subject"), entity_names),
+    }
 
 
 def direct_state_lookup(session, speaker: str, question: str) -> dict | None:
     """
     Checks known states before falling back to fuzzy multi-lane search.
-    Scoped across ALL of this speaker's entities (not hardcoded to "User")
-    so it generalizes beyond the self-referential case — matches
-    match_question_to_attribute()'s scope and doesn't bake in an assumption
-    about which entity name self-reference normalization happens to use.
+    Scoped to the ONE entity the question is about: the classification
+    call also resolves a subject ("self" -> the canonical "User" entity,
+    or the exact name of an existing entity for third-party questions),
+    and every state query filters on that entity name, so it cannot return
+    another entity's state. If the subject can't be resolved to an
+    existing entity, returns None (no guess) and the fuzzy lanes handle
+    the question.
 
     Classification is one LLM call in either direction, never two:
     - If _match_attribute_fast() (the cheap exact/substring layers)
-      resolves an attribute, only classify_temporal_intent() runs —
-      identical to before.
+      resolves an attribute, only classify_temporal_and_subject() runs.
     - If the cheap layers find nothing, classify_question() runs once,
-      doing attribute matching's LLM layer and temporal classification
-      together, instead of match_question_to_attribute()'s old separate
-      Layer-3 call followed by a second classify_temporal_intent() call.
+      doing attribute matching's LLM layer, temporal classification and
+      subject resolution together.
 
-    Once attribute and temporal are known (whichever path produced them),
-    branches exactly as before: "current" questions check active=true
-    states; "historical" questions check active=false states, taking the
-    single most recently superseded one via ORDER BY s.superseded_at DESC
-    LIMIT 1 — deterministic even when more than one historical state
-    exists for the attribute (e.g. a job changed twice).
+    Once attribute, temporal and subject are known, "current" questions
+    check the subject's active=true state; "historical" questions check
+    the subject's active=false states, taking the single most recently
+    superseded one via ORDER BY s.superseded_at DESC LIMIT 1 —
+    deterministic even when more than one historical state exists.
 
     Returns None (not a guess) whenever the match is ambiguous or absent:
-    no attribute match, no active state for that attribute when asking
-    about the current value (or more than one active state for it, e.g.
-    the same attribute active on two different entities), or no superseded
-    state at all when asking about a historical value.
+    no attribute match, an unresolvable subject, no active state for that
+    attribute on the subject when asking about the current value (or more
+    than one), or no superseded state at all when asking about a
+    historical value.
     """
     question_lower = question.strip().lower()
+    entity_names = [
+        row["name"] for row in session.run(
+            "MATCH (e:Entity {speaker: $speaker}) RETURN e.name AS name",
+            speaker=speaker,
+        )
+    ]
     attribute = _match_attribute_fast(session, speaker, question_lower)
 
     if attribute is not None:
-        temporal = classify_temporal_intent(question)
+        classification = classify_temporal_and_subject(question, entity_names)
     else:
         rows = session.run(
             "MATCH (:Entity {speaker: $speaker})-[:OF_ENTITY]-(s:State) "
@@ -404,19 +468,23 @@ def direct_state_lookup(session, speaker: str, question: str) -> dict | None:
         if not known_attributes:
             return None
 
-        classification = classify_question(question, known_attributes)
+        classification = classify_question(question, known_attributes, entity_names)
         attribute = classification["attribute"]
-        temporal = classification["temporal"]
         if attribute is None:
             return None
 
+    temporal = classification["temporal"]
+    subject = classification["subject"]
+    if subject is None:
+        return None
+
     if temporal == "historical":
         rows = list(session.run(
-            "MATCH (e:Entity {speaker: $speaker})-[:OF_ENTITY]-(s:State {attribute: $attribute}) "
+            "MATCH (e:Entity {speaker: $speaker, name: $subject})-[:OF_ENTITY]-(s:State {attribute: $attribute}) "
             "WHERE s.active = false "
             "RETURN e.name AS entity, s.value AS value "
             "ORDER BY s.superseded_at DESC LIMIT 1",
-            speaker=speaker, attribute=attribute,
+            speaker=speaker, subject=subject, attribute=attribute,
         ))
         if not rows:
             return None
@@ -432,10 +500,10 @@ def direct_state_lookup(session, speaker: str, question: str) -> dict | None:
         }
 
     rows = list(session.run(
-        "MATCH (e:Entity {speaker: $speaker})-[:OF_ENTITY]-(s:State {attribute: $attribute}) "
+        "MATCH (e:Entity {speaker: $speaker, name: $subject})-[:OF_ENTITY]-(s:State {attribute: $attribute}) "
         "WHERE s.active = true "
         "RETURN e.name AS entity, s.value AS value",
-        speaker=speaker, attribute=attribute,
+        speaker=speaker, subject=subject, attribute=attribute,
     ))
     if len(rows) != 1:
         return None
