@@ -322,22 +322,26 @@ person asking (I, me, my, mine, myself), otherwise the EXACT name of one of thes
 {entities} — or null if it is about someone or something not in that list. Never invent a name that is \
 not in the list."""
 
-_TEMPORAL_SUBJECT_PROMPT_TEMPLATE = """You are classifying a user's question two ways: (1) "temporal": \
+_ANCHOR_RULES = """"anchor" is only for "historical" questions that name a specific value as the \
+reference point, e.g. "where did I live before Melbourne" -> "Melbourne"; give just that value as the user \
+wrote it. Use null if the question is "current" or names no such value (e.g. "what was my previous city")."""
+
+_TEMPORAL_SUBJECT_PROMPT_TEMPLATE = """You are classifying a user's question three ways: (1) "temporal": \
 "current" if it asks about the CURRENT/present value of something, "historical" if it asks about a \
-PAST/PREVIOUS value; (2) """ + _SUBJECT_RULES + """
+PAST/PREVIOUS value; (2) """ + _SUBJECT_RULES + """ (3) """ + _ANCHOR_RULES + """
 
 Respond with ONLY valid JSON, no prose, no markdown code fences, in exactly this shape: \
-{{"temporal": "current", "subject": "self"}}"""
+{{"temporal": "<current or historical>", "subject": "<self, an entity name, or null>", "anchor": "<value as written, or null>"}}"""
 
 _COMBINED_CLASSIFY_PROMPT_TEMPLATE = """You are matching a user's question to one of their known tracked \
-attributes, classifying whether it's asking about a CURRENT/present value or a PAST/PREVIOUS value, and \
-saying who it is about. Known attributes: {attributes}.
+attributes, classifying whether it's asking about a CURRENT/present value or a PAST/PREVIOUS value, \
+saying who it is about, and naming any anchor value. Known attributes: {attributes}.
 
-Do all three in a single response. "attribute" is one of the known attributes (exact string), or null if \
-none apply; "temporal" is "current" or "historical" regardless of whether an attribute matched; """ + _SUBJECT_RULES + """
+Do all four in a single response. "attribute" is one of the known attributes (exact string), or null if \
+none apply; "temporal" is "current" or "historical" regardless of whether an attribute matched; """ + _SUBJECT_RULES + """ """ + _ANCHOR_RULES + """
 
 Respond with ONLY valid JSON, no prose, no markdown code fences, in exactly this shape: \
-{{"attribute": "<one of the known attributes>", "temporal": "current", "subject": "self"}}. Never invent an \
+{{"attribute": "<one of the known attributes>", "temporal": "<current or historical>", "subject": "<self, an entity name, or null>", "anchor": "<value as written, or null>"}}. Never invent an \
 attribute name that is not in the provided list — only ever return one of the exact strings given, or \
 null."""
 
@@ -361,9 +365,20 @@ def _resolve_subject(raw, entity_names: list[str]) -> str | None:
     return None
 
 
+def _clean_anchor(raw, temporal: str) -> str | None:
+    """
+    The anchor is only meaningful for historical questions and must be a
+    non-empty string; anything else is None ("no anchor named").
+    """
+    if temporal != "historical" or not isinstance(raw, str):
+        return None
+    return raw.strip() or None
+
+
 def classify_temporal_and_subject(question: str, entity_names: list[str]) -> dict:
     """
-    One LLM call returning {"temporal": ..., "subject": <entity name|None>}.
+    One LLM call returning {"temporal": ..., "subject": <entity name|None>,
+    "anchor": <value string|None>}.
     Used when the cheap attribute layers already resolved the attribute.
     Same safe default as classify_temporal_intent() for temporal ("current");
     an unresolvable subject is None, and the caller must not look anything
@@ -377,6 +392,7 @@ def classify_temporal_and_subject(question: str, entity_names: list[str]) -> dic
     return {
         "temporal": temporal,
         "subject": _resolve_subject(classification.get("subject"), entity_names),
+        "anchor": _clean_anchor(classification.get("anchor"), temporal),
     }
 
 
@@ -395,7 +411,10 @@ def classify_question(question: str, known_attributes: list[str], entity_names: 
     superseded value for the current one); "subject" resolves to an
     existing entity name via _resolve_subject() or None. If the call fails
     or parses badly, extract_json() returns {} and the result is
-    {"attribute": None, "temporal": "current", "subject": None}.
+    {"attribute": None, "temporal": "current", "subject": None, "anchor": None}.
+    "anchor" is the value a historical question names as its reference
+    point ("before Melbourne" -> "Melbourne"), as free text; it is only ever
+    used after being matched against the subject's real state values.
     """
     system_prompt = _COMBINED_CLASSIFY_PROMPT_TEMPLATE.format(
         attributes=known_attributes, entities=entity_names,
@@ -414,7 +433,37 @@ def classify_question(question: str, known_attributes: list[str], entity_names: 
         "attribute": attribute,
         "temporal": temporal,
         "subject": _resolve_subject(classification.get("subject"), entity_names),
+        "anchor": _clean_anchor(classification.get("anchor"), temporal),
     }
+
+
+def _find_anchor_state(session, speaker: str, subject: str, attribute: str, anchor: str) -> str | None:
+    """
+    Returns the id of the subject's State whose value the anchor names, or
+    None (never a guess). Values are matched the way entity and attribute
+    names are elsewhere in the system: case-insensitive exact match first,
+    then case-insensitive substring containment (either direction) — and
+    the substring layer only counts if it is unambiguous (all containing
+    matches carry the same value). When the same value occurs more than
+    once in the history (e.g. Sydney, ..., Sydney again) the most recently
+    created occurrence is used.
+    """
+    rows = list(session.run(
+        "MATCH (e:Entity {speaker: $speaker, name: $subject})-[:OF_ENTITY]-(s:State {attribute: $attribute}) "
+        "RETURN s.id AS id, s.value AS value ORDER BY s.created_at DESC",
+        speaker=speaker, subject=subject, attribute=attribute,
+    ))
+    wanted = anchor.strip().lower()
+    states = [(row["id"], str(row["value"]).strip().lower()) for row in rows if row["value"] is not None]
+
+    for state_id, value in states:
+        if value == wanted:
+            return state_id
+
+    partial = [(state_id, value) for state_id, value in states if wanted in value or value in wanted]
+    if partial and len({value for _, value in partial}) == 1:
+        return partial[0][0]
+    return None
 
 
 def direct_state_lookup(session, speaker: str, question: str) -> dict | None:
@@ -436,10 +485,13 @@ def direct_state_lookup(session, speaker: str, question: str) -> dict | None:
       subject resolution together.
 
     Once attribute, temporal and subject are known, "current" questions
-    check the subject's active=true state; "historical" questions check
-    the subject's active=false states, taking the single most recently
-    superseded one via ORDER BY s.superseded_at DESC LIMIT 1 —
-    deterministic even when more than one historical state exists.
+    check the subject's active=true state. "Historical" questions that
+    name an anchor value ("before Melbourne") return the state immediately
+    preceding the anchor's state (see _find_anchor_state and the
+    SUPERSEDES walk below); an anchor matching nothing returns None.
+    "Historical" questions with no anchor ("my previous city") take the
+    subject's single most recently superseded state via ORDER BY
+    s.superseded_at DESC LIMIT 1.
 
     Returns None (not a guess) whenever the match is ambiguous or absent:
     no attribute match, an unresolvable subject, no active state for that
@@ -475,8 +527,35 @@ def direct_state_lookup(session, speaker: str, question: str) -> dict | None:
 
     temporal = classification["temporal"]
     subject = classification["subject"]
+    anchor = classification.get("anchor")
     if subject is None:
         return None
+
+    if temporal == "historical" and anchor is not None:
+        # "before X": find the state whose value is X, then its immediate
+        # predecessor. SUPERSEDES edges run from each new State to EVERY
+        # older inactive State of the pair (graph_engine.create_state), so
+        # the immediate predecessor is the most recently created State the
+        # anchor state supersedes. An anchor that matches no state in the
+        # chain returns None — never a fallback to the most recent one.
+        anchor_id = _find_anchor_state(session, speaker, subject, attribute, anchor)
+        if anchor_id is None:
+            return None
+        rows = list(session.run(
+            "MATCH (:State {id: $anchor_id})-[:SUPERSEDES]->(p:State) "
+            "RETURN p.value AS value ORDER BY p.created_at DESC LIMIT 1",
+            anchor_id=anchor_id,
+        ))
+        if not rows:
+            return None
+        return {
+            "source": "direct_lookup",
+            "attribute": attribute,
+            "value": rows[0]["value"],
+            "entity": subject,
+            "confidence": "high",
+            "state_status": "superseded",
+        }
 
     if temporal == "historical":
         rows = list(session.run(
