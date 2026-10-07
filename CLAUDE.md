@@ -850,6 +850,48 @@ retrieval-augmented reasoning about the user's evolving context.
   test_agent_retry_isolated 8/8, test_followup_retry_isolated 14/14,
   test_regression_live 6/6 (run against a throwaway speaker).
 
+- Fixed historical "before X" anchoring (QA audit finding 2), 2026-10-07.
+  Root cause: the historical branch of direct_state_lookup() never looked
+  at which value the question named; it always ran ORDER BY
+  s.superseded_at DESC LIMIT 1 and returned the most recently superseded
+  state. Correct by coincidence on 2-state chains and for the newest
+  anchor, wrong for any other anchor on 3+ state chains (Sydney ->
+  Melbourne -> Pune -> Mumbai: "before Pune" and "before Melbourne" both
+  returned Pune). The classification call extracted no anchor.
+  Fix (retrieval.py): the existing classification call now also returns
+  an "anchor" (the value a historical question names as its reference
+  point, else null) — no extra LLM round-trip; both prompts' example JSON
+  shapes were made neutral placeholders so the example doesn't bias the
+  model toward "historical". New _find_anchor_state() matches the anchor
+  against the subject's real state values the way entity/attribute names
+  are matched elsewhere (case-insensitive exact, then unambiguous
+  substring; no value-matching rule existed before). The lookup then
+  returns the state the anchor state supersedes: SUPERSEDES edges run
+  from each new State to EVERY older inactive State, so the immediate
+  predecessor is the most recently created State the anchor supersedes.
+  An anchor matching no state, or the first state in the chain, returns
+  None — never a fallback to the most recent. No anchor ("my previous
+  city") keeps the old most-recently-superseded behavior.
+  Evidence: new test_historical_anchor_live.py (4-state chain on a
+  throwaway speaker, setup verifies the chain and edges) passes 9/9 on
+  the fix; on the pre-fix code 6/9 fail (before Melbourne and before Pune
+  both returned Pune, before Perth and before Sydney returned Pune
+  instead of None, and both agent-level checks failed — one answer was
+  empty, the separate empty-answer bug still on Next up); the three
+  passes were the coincidental cases (before Mumbai, no-anchor, current).
+  Other suites unchanged: test_offline 7/7, test_failure_detection 5/5,
+  test_agent_retry_isolated 8/8, test_followup_retry_isolated 14/14,
+  test_subject_scoping_live 7/7, test_regression_live 6/6 (throwaway
+  speaker).
+  Known limits: (1) if a value repeats in the history (Sydney ->
+  Melbourne -> Sydney), "before Sydney" resolves to the most recent
+  occurrence — ambiguous by nature. (2) Anchor matching depends on what
+  extraction wrote: if a state value was stored as "moved to Pune" the
+  substring layer only resolves it when unambiguous — the same substring
+  caveat as attribute matching. Agent-level checks in the new test are
+  LLM-dependent; the direct_state_lookup checks are the deterministic
+  evidence.
+
 ## Test files
 
 Reference only — all 8 files are committed. Run from the project root.
@@ -868,6 +910,12 @@ Self-checking suites (print PASS/FAIL per check, nonzero exit on failure):
 - test_followup_retry_isolated.py — `python test_followup_retry_isolated.py`.
   Follow-up-call retry logic, same fake-client approach. No credentials,
   no network. Expected: 14/14.
+- test_historical_anchor_live.py — `python test_historical_anchor_live.py`.
+  LIVE: needs Nebius + Neo4j. Self-checking (9 checks); one throwaway
+  "regress_anchor_*" speaker, deleted afterwards, never touches "default".
+  4-state city chain; checks "before X" returns X's immediate predecessor,
+  no-anchor and unmatched-anchor behavior. Agent-level checks are
+  LLM-dependent — re-run before treating one failure as a bug.
 - test_subject_scoping_live.py — `python test_subject_scoping_live.py`. LIVE:
   needs Nebius + Neo4j. Self-checking (7 checks); uses throwaway
   "regress_subject_*" speakers and deletes them, never touches "default".
@@ -897,20 +945,19 @@ Neo4j credentials):
 ## Next up
 
 Ordered by the QA audit verification (see "QA audit findings" above;
-wrong-subject direct lookup is fixed, see Build log):
-(1) Anchor-aware historical lookup: use the "before X" anchor to return the state
-superseded just before it; add a live 4-state-chain test asked at every
-anchor. (2) Ann/Anna: make entity-resolution Layer 2 whole-word or
-LLM-gated instead of bare substring. (3) Guard tool-call parse/dispatch
+wrong-subject direct lookup and historical anchoring are fixed, see
+Build log):
+(1) Ann/Anna: make entity-resolution Layer 2 whole-word or
+LLM-gated instead of bare substring. (2) Guard tool-call parse/dispatch
 in handle_request (JSON parse, unknown tool, arg type/missing, empty
 choices/tool_calls, tool and retry exceptions, empty answer) to return a
-controlled error. (4) Scope pending-confirmation per session and stop
-clearing it on unrelated asks. (5) Remove or thread through the dead
+controlled error. (3) Scope pending-confirmation per session and stop
+clearing it on unrelated asks. (4) Remove or thread through the dead
 speaker parameter.
-Then the earlier items: (6) Marathon/Hyrox-class hierarchy-invention in
+Then the earlier items: (5) Marathon/Hyrox-class hierarchy-invention in
 the follow-up call: the model imposes ranking hierarchy on any scored
 list; next step is a targeted follow-up-prompt guardrail to present
-comparably-scored results as co-equal facts. (7) Question-text
+comparably-scored results as co-equal facts. (6) Question-text
 self-reference normalization gap (lower priority, unconfirmed harm).
-(8) Continue real usage via the web interface rather than synthetic
+(7) Continue real usage via the web interface rather than synthetic
 testing.
