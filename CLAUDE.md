@@ -763,6 +763,60 @@ retrieval-augmented reasoning about the user's evolving context.
   attempted; flagged for passive monitoring during continued real usage
   rather than further synthetic batch testing.
 
+- QA audit findings (testing branch), 2026-10-07. No code changes in this
+  entry. A teammate's `testing` branch documents 91 cases (46 pass, 45
+  fail; TEST_LOG.md, TEST_RESULTS.md, testing_artifacts/). Branch caveats:
+  it forked at 9b0e35b, 15 commits behind main, so it ran against code
+  that predates the LLM historical classification, LLM attribute
+  resolution, structural malformed-output detection, follow-up retry
+  guard and lane parallelization. It also contains source changes that
+  must NOT be merged: retrieval.py carries the contributor's older
+  keyword-based historical_state_lookup() (len(rows) != 1 bug, conflicts
+  with main's fix) and web_app.py adds a one-line ensure_schema() call
+  (harmless). Take only the logs/scripts if anything. "45 failed" counts
+  cases, not bugs; ~10 are one pattern.
+  Verified against current main (offline fake-client tests, live
+  Nebius + Neo4j under throwaway qa_verify_* speakers, since reset; a
+  stub session emulating the relevant Cypher for two cases):
+  CONFIRMED:
+  (1) Wrong-subject direct lookup: direct_state_lookup() is not scoped to
+  the asking entity. With only Rahul having a city, "Where do I live?"
+  returned Rahul/Canberra (confidence high) and the agent answered "You
+  live in Canberra". Conversely, when User, Rahul and brother all have
+  active cities the len(rows) != 1 check returns None. Wrong-subject
+  historical lookups behave the same (stub).
+  (2) Historical "before X" has no anchor: it returns the most recently
+  superseded value regardless of X. On Sydney -> Melbourne -> Pune ->
+  Mumbai: "before Pune" -> Pune (wrong, expected Melbourne), "before
+  Mumbai" -> Pune (right by coincidence), "before Melbourne" -> Pune
+  (wrong, expected Sydney). Earlier validation passed only because it
+  used 2-state chains or unanchored "previous" questions.
+  (3) Ann/Anna over-merge: resolve_entity Layer 2 substring match
+  ('anna' contains 'ann', len >= 3) merged them live; Ann's Hobart state
+  was superseded by Darwin. "Anne" would collapse too.
+  (4) ~10 uncaught exceptions in agent.handle_request outside the retry
+  guard (which only covers content failures when finish_reason !=
+  "tool_calls"): malformed tool-call JSON, unknown tool, missing/wrong-
+  type args, empty choices, empty tool_calls list, tool raising, Nebius
+  down, retry call raising. Also a None answer on empty content, and a
+  high-stakes confirmation created with empty args.
+  (5) Pending-confirmation state: agent.pending_confirmation is a shared
+  global, so a second Flask client could confirm another client's
+  purchase; and handle_request clears it on entry, so any unrelated ask
+  silently drops a pending confirmation.
+  (6) Dead speaker parameter: handle_request(speaker=...) never reaches
+  query_memory/retrieve (retrieve got speaker=None).
+  NOT REPRODUCED / LLM variance: T015 and T016 (own-city and brother
+  questions with several entities): both answered correctly on main, one
+  run each, so possible variance on weak retrieval, not a structural
+  isolation failure.
+  UNVERIFIED: transitive SUPERSEDES edges (T069/T083; main's query links
+  each new state to all inactive older ones, plausible but not checked
+  live), extraction schema/range validation (T037-T040, T086, T087; only
+  code-read), Flask error pages, correction/duplicate history (T014,
+  T022, T023). The reminder stub (T033) is known. test_offline.py 7/7
+  on main.
+
 ## Test files
 
 Reference only — all 8 files are committed. Run from the project root.
@@ -804,14 +858,23 @@ Neo4j credentials):
 
 ## Next up
 
-(1) Marathon/Hyrox-class hierarchy-invention in the follow-up call: real
-root cause now understood (the model imposes ranking hierarchy on any
-scored list, not specifically the 1.0 anchor). Next concrete step: a more
-targeted follow-up-prompt guardrail instructing it to present multiple
-comparably-scored results as co-equal facts rather than ranking them, now
-informed by a correctly-isolated cause rather than the earlier
-under-informed attempt. (2) Question-text self-reference normalization
-gap (lower priority, unconfirmed to cause real harm yet). (3) Continue
-real usage via the web interface — this session's findings came entirely
-from genuine usage, confirming that's the right path forward, not
-synthetic testing.
+Ordered by the QA audit verification (see "QA audit findings" above):
+(1) Wrong-subject direct lookup: scope direct_state_lookup() to the
+asking entity (self entity for first-person questions, the named entity
+otherwise) instead of any entity with the attribute. (2) Anchor-aware
+historical lookup: use the "before X" anchor to return the state
+superseded just before it; add a live 4-state-chain test asked at every
+anchor. (3) Ann/Anna: make entity-resolution Layer 2 whole-word or
+LLM-gated instead of bare substring. (4) Guard tool-call parse/dispatch
+in handle_request (JSON parse, unknown tool, arg type/missing, empty
+choices/tool_calls, tool and retry exceptions, empty answer) to return a
+controlled error. (5) Scope pending-confirmation per session and stop
+clearing it on unrelated asks. (6) Remove or thread through the dead
+speaker parameter.
+Then the earlier items: (7) Marathon/Hyrox-class hierarchy-invention in
+the follow-up call: the model imposes ranking hierarchy on any scored
+list; next step is a targeted follow-up-prompt guardrail to present
+comparably-scored results as co-equal facts. (8) Question-text
+self-reference normalization gap (lower priority, unconfirmed harm).
+(9) Continue real usage via the web interface rather than synthetic
+testing.
