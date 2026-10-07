@@ -4,8 +4,13 @@ The temporal knowledge graph itself. Every write and read is scoped to a
 
 Entity resolution is three layers, in order, first match wins:
   1. exact match (case-insensitive)
-  2. substring containment
+  2. whole-word containment (every word of the shorter name appears as a
+     whole word in the other, e.g. "Rahul" / "my friend Rahul" — never a
+     raw substring, so "Ann" and "Anna" stay distinct)
   3. embedding cosine similarity above config.ENTITY_SIMILARITY_THRESHOLD
+     picks merge CANDIDATES only; an LLM then confirms whether one is
+     really the same entity (similar-looking names are often different
+     people, and a wrong merge destroys data while a wrong split doesn't)
 
 Supersession is a write-time operation on (entity, attribute): any
 currently-active State for that pair is flagged inactive, and the new State
@@ -19,6 +24,7 @@ index instead of changing the calling code's shape.
 """
 import logging
 import math
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -77,6 +83,45 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
+def _name_words(name: str) -> list[str]:
+    """Lowercased alphanumeric words of an entity name ("My friend Ann" -> [my, friend, ann])."""
+    return re.findall(r"[a-z0-9]+", name.lower())
+
+
+def _names_share_whole_words(a: str, b: str) -> bool:
+    """
+    True if every word of the shorter name is a whole word of the other.
+    Whole words, not raw substrings: "ann" is not a word of "anna".
+    """
+    words_a, words_b = set(_name_words(a)), set(_name_words(b))
+    if not words_a or not words_b:
+        return False
+    return words_a <= words_b or words_b <= words_a
+
+
+_ENTITY_MATCH_PROMPT_TEMPLATE = """A person's memory already contains these named entities: {candidates}. A new piece of information mentions an entity named {new_name!r}. Is it CLEARLY the very same real-world person, place or thing as one of the existing entities (the same name with different casing or a typo, a nickname, an abbreviation, or a full name vs. a short form)? Similar-looking but different names usually belong to DIFFERENT people or places, so if there is any real chance it is a different one, answer null. If it is clearly the same, respond with that EXACT existing name.
+
+Output ONLY valid JSON, no prose: {{"match": "<exact existing name>" or null}}"""
+
+
+def _llm_match_entity(candidates: list[str], new_name: str) -> str | None:
+    """
+    One LLM call: is new_name clearly the same entity as one of the
+    embedding-similar candidates? Strictly validated — anything that isn't
+    exactly one of `candidates` (an invented name, malformed or empty
+    response, a failed call) is None, i.e. keep them distinct. Same
+    closed-list pattern as _llm_match_attribute().
+    """
+    prompt = _ENTITY_MATCH_PROMPT_TEMPLATE.format(candidates=candidates, new_name=new_name)
+    response = llm_client.extract_json(prompt, new_name)
+    match = response.get("match") if isinstance(response, dict) else None
+    logger.info(
+        "Entity LLM match: new=%r candidates=%s -> raw=%r (%s)",
+        new_name, candidates, match, "accepted" if match in candidates else "rejected/new",
+    )
+    return match if match in candidates else None
+
+
 def resolve_entity(session, speaker: str, name: str, embedding: list[float]) -> str:
     """
     Three-layer entity resolution. Returns the canonical entity id (its
@@ -94,30 +139,29 @@ def resolve_entity(session, speaker: str, name: str, embedding: list[float]) -> 
     if result:
         return result["name"]
 
-    # Layer 2: substring containment (longest existing name wins)
-    if len(name_lower) >= config.ENTITY_SUBSTRING_MIN_LEN:
-        result = session.run(
-            "MATCH (e:Entity {speaker: $speaker}) "
-            "WHERE toLower(e.name) CONTAINS $name_lower OR $name_lower CONTAINS toLower(e.name) "
-            "RETURN e.name AS name ORDER BY size(e.name) DESC LIMIT 1",
-            speaker=speaker, name_lower=name_lower,
-        ).single()
-        if result:
-            return result["name"]
-
-    # Layer 3: embedding cosine similarity above threshold
-    rows = session.run(
-        "MATCH (e:Entity {speaker: $speaker}) WHERE e.embedding IS NOT NULL "
+    existing = list(session.run(
+        "MATCH (e:Entity {speaker: $speaker}) "
         "RETURN e.name AS name, e.embedding AS embedding",
         speaker=speaker,
+    ))
+
+    # Layer 2: whole-word containment (longest existing name wins)
+    if len(name_lower) >= config.ENTITY_SUBSTRING_MIN_LEN:
+        matches = [row["name"] for row in existing if _names_share_whole_words(name, row["name"])]
+        if matches:
+            return max(matches, key=len)
+
+    # Layer 3: embedding similarity proposes candidates; the LLM decides.
+    scored = sorted(
+        ((_cosine(embedding, row["embedding"]), row["name"])
+         for row in existing if row["embedding"] is not None),
+        reverse=True,
     )
-    best_name, best_score = None, 0.0
-    for row in rows:
-        score = _cosine(embedding, row["embedding"])
-        if score > best_score:
-            best_name, best_score = row["name"], score
-    if best_name and best_score >= config.ENTITY_SIMILARITY_THRESHOLD:
-        return best_name
+    candidates = [n for score, n in scored if score >= config.ENTITY_SIMILARITY_THRESHOLD]
+    if candidates:
+        matched = _llm_match_entity(candidates, name)
+        if matched:
+            return matched
 
     # No match anywhere: create a new canonical entity
     session.run(
