@@ -148,6 +148,36 @@ def _get_skill(name: str) -> Skill:
     return skill
 
 
+def validate_args(name: str, args) -> tuple[dict | None, str | None]:
+    """
+    Checks model-supplied tool arguments against the skill's declared
+    parameter schema. Returns (clean_args, None) or (None, problem). Used by
+    the agent so a malformed tool call becomes a controlled error instead of
+    an exception, and so a high_stakes skill is never offered for
+    confirmation with missing arguments.
+
+    Rejects: a non-object `args`, an unknown skill, missing/None required
+    arguments, and a declared-"string" argument that is not a string.
+    Arguments the skill doesn't declare are dropped, not rejected.
+    """
+    if not isinstance(args, dict):
+        return None, f"the arguments for '{name}' were not a JSON object"
+    skill = REGISTRY.get(name)
+    if skill is None:
+        return None, f"unknown skill '{name}' (available: {sorted(REGISTRY)})"
+
+    properties = skill.parameters.get("properties", {})
+    missing = [r for r in skill.parameters.get("required", []) if args.get(r) is None]
+    if missing:
+        return None, f"missing required argument(s) for '{name}': {', '.join(missing)}"
+
+    clean = {k: v for k, v in args.items() if k in properties}
+    for key, value in clean.items():
+        if properties[key].get("type") == "string" and not isinstance(value, str):
+            return None, f"argument '{key}' for '{name}' must be a string"
+    return clean, None
+
+
 def run_skill(name: str, speaker: str = None, /, **kwargs) -> dict:
     """
     read_only and reversible_write skills execute immediately. high_stakes

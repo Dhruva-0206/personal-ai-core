@@ -91,20 +91,66 @@ def is_malformed_or_refused(content: str) -> bool:
     return _has_structural_malformation(content) or _has_refusal_heuristic_match(content)
 
 
+class _ControlledError(Exception):
+    """A failure with a message safe to show the user (not a bug in this code)."""
+
+
+def _chat(client, **kwargs):
+    """One model call. Any failure of the call itself becomes a controlled error."""
+    try:
+        return client.chat.completions.create(**kwargs)
+    except Exception as e:
+        logger.exception("Model request failed")
+        raise _ControlledError(f"the language model request failed ({type(e).__name__}).") from e
+
+
+def _first_message(response):
+    """(message, finish_reason) of the first choice, or a controlled error for an empty/odd response."""
+    choices = getattr(response, "choices", None)
+    if not choices:
+        raise _ControlledError("the language model returned an empty response.")
+    return choices[0].message, choices[0].finish_reason
+
+
+def _non_empty(content) -> str:
+    if content is None or not str(content).strip():
+        raise _ControlledError("the language model returned an empty answer.")
+    return content
+
+
 def handle_request(user_message: str, speaker: str = None) -> str:
+    """
+    Always returns a string. Failures of the model call, an empty or odd
+    response shape, malformed/unknown/incomplete tool calls and skills that
+    raise are turned into a short error message instead of an exception.
+    These guards cover response-SHAPE failures that happen before (or
+    around) the content-quality retry in _handle_request(), which stays
+    exactly as it was.
+    """
+    try:
+        return _handle_request(user_message, speaker)
+    except _ControlledError as e:
+        logger.warning("Agent request failed: %s", e)
+        return f"Sorry, I couldn't complete that: {e}"
+    except Exception as e:
+        logger.exception("Unexpected failure in agent.handle_request")
+        return f"Sorry, something went wrong while handling that request ({type(e).__name__}). Please try again."
+
+
+def _handle_request(user_message: str, speaker: str = None) -> str:
     global pending_confirmation
     pending_confirmation = None
 
     client = llm_client.get_client()
 
     messages = [{"role": "user", "content": user_message}]
-    response = client.chat.completions.create(
+    response = _chat(
+        client,
         model=config.EXTRACTION_MODEL,
         messages=messages,
         tools=skills.to_openai_tools(),
     )
-    message = response.choices[0].message
-    finish_reason = response.choices[0].finish_reason
+    message, finish_reason = _first_message(response)
 
     # is_malformed_or_refused() takes only content — the finish_reason !=
     # "tool_calls" gate below is what makes this safe to call: a
@@ -121,13 +167,13 @@ def handle_request(user_message: str, speaker: str = None) -> str:
         # Same request, retried exactly once. Whatever comes back is used
         # as final — no second retry, and the retry's own result is not
         # re-checked for triggering another retry (avoids a retry loop).
-        response = client.chat.completions.create(
+        response = _chat(
+            client,
             model=config.EXTRACTION_MODEL,
             messages=messages,
             tools=skills.to_openai_tools(),
         )
-        message = response.choices[0].message
-        finish_reason = response.choices[0].finish_reason
+        message, finish_reason = _first_message(response)
         if finish_reason != "tool_calls" and is_malformed_or_refused(message.content):
             logger.warning(
                 "Agent tool-calling failure persisted after retry "
@@ -137,16 +183,30 @@ def handle_request(user_message: str, speaker: str = None) -> str:
             )
 
     if finish_reason != "tool_calls":
-        return message.content
+        return _non_empty(message.content)
 
     # Known limitation: only the first tool call is handled. A model
     # response with multiple tool_calls in one turn would silently drop
     # the rest — fine for this phase, revisit if/when that's observed.
-    tool_call = message.tool_calls[0]
+    tool_calls = getattr(message, "tool_calls", None)
+    if not tool_calls:
+        raise _ControlledError("the model asked to use a tool but did not say which one.")
+    tool_call = tool_calls[0]
     name = tool_call.function.name
-    args = json.loads(tool_call.function.arguments)
+    try:
+        raw_args = json.loads(tool_call.function.arguments)
+    except (TypeError, ValueError) as e:
+        raise _ControlledError(f"the model sent unreadable arguments for '{name}'.") from e
 
-    result = skills.run_skill(name, speaker, **args)
+    args, problem = skills.validate_args(name, raw_args)
+    if problem:
+        raise _ControlledError(f"the model's tool call was invalid: {problem}.")
+
+    try:
+        result = skills.run_skill(name, speaker, **args)
+    except Exception as e:
+        logger.exception("Skill %r raised", name)
+        raise _ControlledError(f"the '{name}' skill failed ({type(e).__name__}).") from e
 
     if result.get("status") == "needs_confirmation":
         # A high_stakes skill must never auto-execute just because an LLM
@@ -182,11 +242,12 @@ def handle_request(user_message: str, speaker: str = None) -> str:
     }
 
     follow_up_messages = messages + [tool_message, tool_result_message]
-    follow_up = client.chat.completions.create(
+    follow_up = _chat(
+        client,
         model=config.EXTRACTION_MODEL,
         messages=follow_up_messages,
     )
-    content = follow_up.choices[0].message.content
+    content = _first_message(follow_up)[0].content
 
     # Same detection and single-retry policy as the tool-selection call
     # above, applied to the FOLLOW-UP call. WARNINGs say "follow-up call" so
@@ -197,11 +258,12 @@ def handle_request(user_message: str, speaker: str = None) -> str:
             "the follow-up call once. Raw content: %r",
             _categorize_failure(content), content,
         )
-        follow_up = client.chat.completions.create(
+        follow_up = _chat(
+            client,
             model=config.EXTRACTION_MODEL,
             messages=follow_up_messages,
         )
-        content = follow_up.choices[0].message.content
+        content = _first_message(follow_up)[0].content
         if is_malformed_or_refused(content):
             logger.warning(
                 "Agent follow-up call failure persisted after retry "
@@ -209,4 +271,4 @@ def handle_request(user_message: str, speaker: str = None) -> str:
                 "Raw content: %r",
                 _categorize_failure(content), content,
             )
-    return content
+    return _non_empty(content)
