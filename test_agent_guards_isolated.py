@@ -115,16 +115,16 @@ def test_tool_call_shape():
 
 def test_high_stakes_validation():
     safe_print("\nHigh-stakes validation (T090)")
-    agent.pending_confirmation = None
+    agent.clear_pending()
     check_controlled("make_purchase with no arguments", [response("tool_calls", tool_calls=[tool_call("make_purchase", "{}")])],
                      expect_in_answer="missing required")
-    check("rejected purchase did NOT become a pending confirmation", agent.pending_confirmation is None,
-          f"pending: {agent.pending_confirmation!r}")
+    check("rejected purchase did NOT become a pending confirmation", agent.get_pending() is None,
+          f"pending: {agent.get_pending()!r}")
     answer, raised, _ = run([response("tool_calls", tool_calls=[tool_call("make_purchase", '{"item": "lamp", "price": "$5"}')])])
     check("a valid purchase still becomes a pending confirmation (unchanged behavior)",
-          raised is None and agent.pending_confirmation is not None and agent.pending_confirmation["args"] == {"item": "lamp", "price": "$5"},
-          f"answer={answer!r} pending={agent.pending_confirmation!r}")
-    agent.pending_confirmation = None
+          raised is None and agent.get_pending() is not None and agent.get_pending()["args"] == {"item": "lamp", "price": "$5"},
+          f"answer={answer!r} pending={agent.get_pending()!r}")
+    agent.clear_pending()
 
 
 def test_response_shape():

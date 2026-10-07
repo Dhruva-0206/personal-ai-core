@@ -6,7 +6,10 @@ external CDN dependencies — fully offline-reliable.
 Run with: python web_app.py
 Then open: http://127.0.0.1:5000/
 """
-from flask import Flask, render_template, request
+import secrets
+import uuid
+
+from flask import Flask, render_template, request, session
 
 import agent
 import config
@@ -15,6 +18,19 @@ import pipeline
 import skills
 
 app = Flask(__name__)
+# Signs the session cookie that identifies a client, so pending high-stakes
+# confirmations are per client and a client can't forge another's id. A random
+# per-process key is enough for this local app: restarting the server just
+# starts everyone on fresh sessions (and pending actions don't survive a
+# restart anyway).
+app.secret_key = secrets.token_hex(32)
+
+
+def _session_id() -> str:
+    """This client's id, created on first use and kept in the signed session cookie."""
+    if "sid" not in session:
+        session["sid"] = uuid.uuid4().hex
+    return session["sid"]
 
 
 def _recent_episodes():
@@ -27,7 +43,7 @@ def _render(message=None):
     return render_template(
         "index.html",
         message=message,
-        pending=agent.pending_confirmation,
+        pending=agent.get_pending(_session_id()),
         recent_episodes=_recent_episodes(),
     )
 
@@ -57,14 +73,15 @@ def ask():
     if not question:
         return _render(message={"text": "Nothing to ask — the question field was empty.", "is_error": True})
 
-    answer = agent.handle_request(question)
+    answer = agent.handle_request(question, session_id=_session_id())
     return _render(message={"text": answer, "is_error": False})
 
 
 @app.route("/confirm", methods=["POST"])
 def confirm():
     action = request.form.get("action")
-    pending = agent.pending_confirmation
+    session_id = _session_id()
+    pending = agent.get_pending(session_id)
     if pending is None:
         return _render(message={"text": "Nothing pending to confirm.", "is_error": True})
 
@@ -74,7 +91,7 @@ def confirm():
     else:
         message_text = "Cancelled."
 
-    agent.pending_confirmation = None
+    agent.clear_pending(session_id)
     return _render(message={"text": message_text, "is_error": False})
 
 

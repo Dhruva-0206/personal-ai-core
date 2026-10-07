@@ -14,13 +14,36 @@ import skills
 
 logger = logging.getLogger(__name__)
 
-# Set by handle_request() only when it returns a needs_confirmation
-# description, holding what's needed to actually run the skill afterward
-# (skills.confirm_skill(pending["name"], **pending["args"])). cli.py reads
-# this right after calling handle_request() so it can reuse the same
-# confirm-and-run code path the direct `skill` command uses, instead of
-# trying to re-parse the returned description string. None otherwise.
-pending_confirmation: dict | None = None
+# Pending high-stakes confirmations, one per session. handle_request() stores
+# one only when it returns a needs_confirmation description, holding what's
+# needed to actually run the skill afterward
+# (skills.confirm_skill(pending["name"], **pending["args"])). Callers fetch
+# it with get_pending(session_id) — cli.py right after handle_request(), so it
+# reuses the same confirm-and-run path as the direct `skill` command instead
+# of re-parsing the description string; web_app.py once per client.
+#
+# Keyed by session_id so one client can never see or confirm another's
+# action. The CLI is a single user and uses session_id=None.
+#
+# Lifecycle (the safer choice, on purpose): a pending action stays pending
+# across unrelated asks and is cleared ONLY by clear_pending() — an explicit
+# confirm or cancel. Silently dropping it on the next question could lose an
+# approval the user still intends to give, or make them re-ask without
+# knowing why. A newer high-stakes request in the same session REPLACES the
+# older pending one, so the UI only ever shows the latest action. Known
+# simplification: there is no expiry, so an abandoned pending action lives
+# until the process exits.
+_pending_by_session: dict = {}
+
+
+def get_pending(session_id: str = None) -> dict | None:
+    """The session's pending high-stakes action, or None."""
+    return _pending_by_session.get(session_id)
+
+
+def clear_pending(session_id: str = None) -> None:
+    """Drop the session's pending action (call after an explicit confirm or cancel)."""
+    _pending_by_session.pop(session_id, None)
 
 # Small, deliberately non-exhaustive set of low-level phrase fragments
 # seen in genuine refusals so far. This is a heuristic net, not a
@@ -118,7 +141,7 @@ def _non_empty(content) -> str:
     return content
 
 
-def handle_request(user_message: str, speaker: str = None) -> str:
+def handle_request(user_message: str, speaker: str = None, session_id: str = None) -> str:
     """
     Always returns a string. Failures of the model call, an empty or odd
     response shape, malformed/unknown/incomplete tool calls and skills that
@@ -128,7 +151,7 @@ def handle_request(user_message: str, speaker: str = None) -> str:
     exactly as it was.
     """
     try:
-        return _handle_request(user_message, speaker)
+        return _handle_request(user_message, speaker, session_id)
     except _ControlledError as e:
         logger.warning("Agent request failed: %s", e)
         return f"Sorry, I couldn't complete that: {e}"
@@ -137,10 +160,7 @@ def handle_request(user_message: str, speaker: str = None) -> str:
         return f"Sorry, something went wrong while handling that request ({type(e).__name__}). Please try again."
 
 
-def _handle_request(user_message: str, speaker: str = None) -> str:
-    global pending_confirmation
-    pending_confirmation = None
-
+def _handle_request(user_message: str, speaker: str = None, session_id: str = None) -> str:
     client = llm_client.get_client()
 
     messages = [{"role": "user", "content": user_message}]
@@ -214,7 +234,7 @@ def _handle_request(user_message: str, speaker: str = None) -> str:
         # control back exactly like the CLI's direct `skill` path does.
         # The actual "type yes" prompt is the CLI's job (same code path as
         # the direct `skill` command), not baked into this returned string.
-        pending_confirmation = {
+        _pending_by_session[session_id] = {
             "name": name,
             "args": args,
             "description": result["description"],

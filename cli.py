@@ -145,11 +145,12 @@ def cmd_skill(name: str, argv: list[str]):
 
 def cmd_agent(user_message: str):
     answer = agent.handle_request(user_message)
-    pending = agent.pending_confirmation
+    pending = agent.get_pending()
     if pending is not None:
         # answer == pending["description"] here; _confirm_and_run prints
         # it, so don't print it twice.
         _confirm_and_run(pending["name"], pending["args"], pending["description"])
+        agent.clear_pending()
     else:
         _safe_print(answer)
 
